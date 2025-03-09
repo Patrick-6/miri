@@ -65,6 +65,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             }
         }
 
+        // TODO GENMC: notify GenMC about atomics
         match &*intrinsic_structure {
             ["load", ord] => this.atomic_load(args, dest, read_ord(ord))?,
             ["store", ord] => this.atomic_store(args, write_ord(ord))?,
@@ -138,6 +139,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         let val = this.read_scalar_atomic(&place, atomic)?;
         // Perform regular store.
         this.write_scalar(val, dest)?;
+
         interp_ok(())
     }
 
@@ -151,6 +153,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         let val = this.read_scalar(val)?;
         // Perform atomic store
         this.write_scalar_atomic(val, &place, atomic)?;
+
         interp_ok(())
     }
 
@@ -162,6 +165,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         let [] = check_intrinsic_arg_count(args)?;
         let _ = atomic;
         //FIXME: compiler fences are currently ignored
+        // TODO GENMC: compiler fences?
         interp_ok(())
     }
 
@@ -173,6 +177,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         let this = self.eval_context_mut();
         let [] = check_intrinsic_arg_count(args)?;
         this.atomic_fence(atomic)?;
+
         interp_ok(())
     }
 
@@ -203,19 +208,23 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
             AtomicOp::Min => {
                 let old = this.atomic_min_max_scalar(&place, rhs, true, atomic)?;
                 this.write_immediate(*old, dest)?; // old value is returned
-                interp_ok(())
             }
             AtomicOp::Max => {
                 let old = this.atomic_min_max_scalar(&place, rhs, false, atomic)?;
                 this.write_immediate(*old, dest)?; // old value is returned
-                interp_ok(())
             }
             AtomicOp::MirOp(op, not) => {
                 let old = this.atomic_rmw_op_immediate(&place, &rhs, op, not, atomic)?;
                 this.write_immediate(*old, dest)?; // old value is returned
-                interp_ok(())
             }
         }
+
+        // Inform GenMC about the atomic rmw operation.
+        // TODO GENMC: is this the correct place to put this?
+        if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
+            genmc_ctx.atomic_rmw_op(&this.machine).unwrap(); // TODO GENMC: proper error handling
+        }
+        interp_ok(()) // TODO GENMC: is it ok to move the interp_ok call outside the match statement?
     }
 
     fn atomic_exchange(
@@ -232,6 +241,12 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
 
         let old = this.atomic_exchange_scalar(&place, new, atomic)?;
         this.write_scalar(old, dest)?; // old value is returned
+
+        // Inform GenMC about the atomic atomic exchange.
+        if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
+            genmc_ctx.atomic_exchange(&this.machine).unwrap(); // TODO GENMC: proper error handling
+        }
+
         interp_ok(())
     }
 
@@ -261,6 +276,12 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
 
         // Return old value.
         this.write_immediate(old, dest)?;
+
+        // Inform GenMC about the atomic atomic compare exchange.
+        if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
+            genmc_ctx.atomic_compare_exchange(&this.machine, can_fail_spuriously).unwrap(); // TODO GENMC: proper error handling
+        }
+
         interp_ok(())
     }
 
