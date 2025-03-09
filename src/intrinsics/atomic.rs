@@ -65,6 +65,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             }
         }
 
+        // TODO GENMC: notify GenMC about atomics
         match &*intrinsic_structure {
             ["load", ord] => this.atomic_load(args, dest, read_ord(ord))?,
             ["store", ord] => this.atomic_store(args, write_ord(ord))?,
@@ -138,6 +139,18 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         let val = this.read_scalar_atomic(&place, atomic)?;
         // Perform regular store.
         this.write_scalar(val, dest)?;
+
+        // Inform GenMC about the atomic load.
+        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
+            // TODO GENMC: find a better way to get the alloc_id
+            let address = dest.ptr().addr().bits_usize();
+            let ptr: interpret::Pointer<Provenance> = interpret::Pointer::new(place.ptr().provenance.unwrap(), place.ptr().addr());
+            let size = place.layout.size.bits().try_into().unwrap();
+            let (alloc_id, _) = this.ptr_get_alloc(ptr, size).unwrap();
+            
+            genmc_ctx.atomic_load(alloc_id, address, atomic).unwrap(); // TODO GENMC proper error handling
+        }
+
         interp_ok(())
     }
 
@@ -151,6 +164,17 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         let val = this.read_scalar(val)?;
         // Perform atomic store
         this.write_scalar_atomic(val, &place, atomic)?;
+
+        // Inform GenMC about the atomic store.
+        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
+            // TODO GENMC: find a better way to get the alloc_id
+            let address = place.ptr().addr().bits_usize();
+            let ptr: interpret::Pointer<Provenance> = interpret::Pointer::new(place.ptr().provenance.unwrap(), place.ptr().addr());
+            let size = place.layout.size.bits().try_into().unwrap();
+            let (alloc_id, _) = this.ptr_get_alloc(ptr, size).unwrap();
+
+            genmc_ctx.atomic_store(alloc_id, address, atomic).unwrap(); // TODO GENMC proper error handling
+        }
         interp_ok(())
     }
 
@@ -162,6 +186,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         let [] = check_intrinsic_arg_count(args)?;
         let _ = atomic;
         //FIXME: compiler fences are currently ignored
+        // TODO GENMC: compiler fences?
         interp_ok(())
     }
 
@@ -173,6 +198,11 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         let this = self.eval_context_mut();
         let [] = check_intrinsic_arg_count(args)?;
         this.atomic_fence(atomic)?;
+
+        // Inform GenMC about the atomic fence.
+        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
+            genmc_ctx.atomic_fence().unwrap(); // TODO GENMC: proper error handling
+        }
         interp_ok(())
     }
 
@@ -203,19 +233,22 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
             AtomicOp::Min => {
                 let old = this.atomic_min_max_scalar(&place, rhs, true, atomic)?;
                 this.write_immediate(*old, dest)?; // old value is returned
-                interp_ok(())
             }
             AtomicOp::Max => {
                 let old = this.atomic_min_max_scalar(&place, rhs, false, atomic)?;
                 this.write_immediate(*old, dest)?; // old value is returned
-                interp_ok(())
             }
             AtomicOp::MirOp(op, not) => {
                 let old = this.atomic_rmw_op_immediate(&place, &rhs, op, not, atomic)?;
                 this.write_immediate(*old, dest)?; // old value is returned
-                interp_ok(())
             }
         }
+
+        // Inform GenMC about the atomic rmw operation.
+        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
+            genmc_ctx.atomic_rmw_op().unwrap(); // TODO GENMC: proper error handling
+        }
+        interp_ok(()) // TODO GENMC: is it ok to move the interp_ok call outside the match statement?
     }
 
     fn atomic_exchange(
@@ -232,6 +265,12 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
 
         let old = this.atomic_exchange_scalar(&place, new, atomic)?;
         this.write_scalar(old, dest)?; // old value is returned
+
+        // Inform GenMC about the atomic atomic exchange.
+        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
+            genmc_ctx.atomic_exchange().unwrap(); // TODO GENMC: proper error handling
+        }
+
         interp_ok(())
     }
 
@@ -261,6 +300,12 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
 
         // Return old value.
         this.write_immediate(old, dest)?;
+
+        // Inform GenMC about the atomic atomic compare exchange.
+        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
+            genmc_ctx.atomic_compare_exchange(can_fail_spuriously).unwrap(); // TODO GENMC: proper error handling
+        }
+
         interp_ok(())
     }
 

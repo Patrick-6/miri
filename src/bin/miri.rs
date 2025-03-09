@@ -205,6 +205,8 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
                 eprintln!("{num_failed}/{total} SEEDS FAILED", total = many_seeds.seeds.count());
             }
             std::process::exit(exit_code.0.into_inner());
+        // } else if let Some(genmc_config) = config.genmc_config {
+        //     todo!() // TODO GENMC: implement GenMC loop
         } else {
             let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, config)
                 .unwrap_or_else(|| {
@@ -596,6 +598,10 @@ fn main() {
             many_seeds = Some(0..64);
         } else if arg == "-Zmiri-many-seeds-keep-going" {
             many_seeds_keep_going = true;
+        } else if arg == "-Zmiri-genmc" {
+            // TODO GENMC: add to documentation
+            // TODO GENMC: add more GenMC options
+            miri_config.genmc_config = Some(Default::default());
         } else if let Some(param) = arg.strip_prefix("-Zmiri-env-forward=") {
             miri_config.forwarded_env_vars.push(param.to_owned());
         } else if let Some(param) = arg.strip_prefix("-Zmiri-env-set=") {

@@ -726,6 +726,9 @@ impl<'tcx> ThreadManager<'tcx> {
         // `skip(N)` means we start iterating at thread N, so we skip 1 more to start just *after*
         // the active thread. Then after that we look at `take(N)`, i.e., the threads *before* the
         // active thread.
+        //
+        // TODO GENMC: in GenMC mode, ask GenMC for the next thread to schedule
+        // TODO GENMC: should this be affected by the seed given to Miri? (e.g., choose random unblocked thread, potentially including scheduling the same thread again after a yield)
         let threads = self
             .threads
             .iter_enumerated()

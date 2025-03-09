@@ -84,6 +84,7 @@ mod clock;
 mod concurrency;
 mod diagnostics;
 mod eval;
+mod genmc;
 mod helpers;
 mod intrinsics;
 mod machine;

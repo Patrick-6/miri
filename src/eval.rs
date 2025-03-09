@@ -16,6 +16,7 @@ use rustc_session::config::EntryFnType;
 
 use crate::concurrency::thread::TlsAllocAction;
 use crate::diagnostics::report_leaks;
+use crate::genmc::GenmcConfig;
 use crate::shims::tls;
 use crate::*;
 
@@ -163,6 +164,8 @@ pub struct MiriConfig {
     pub address_reuse_rate: f64,
     /// Probability for address reuse across threads.
     pub address_reuse_cross_thread_rate: f64,
+    /// Settings for using GenMC with Miri (if enabled). Default: None
+    pub genmc_config: Option<GenmcConfig>,
 }
 
 impl Default for MiriConfig {
@@ -200,6 +203,7 @@ impl Default for MiriConfig {
             collect_leak_backtraces: true,
             address_reuse_rate: 0.5,
             address_reuse_cross_thread_rate: 0.1,
+            genmc_config: None,
         }
     }
 }

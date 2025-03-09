@@ -30,6 +30,7 @@ use rustc_target::callconv::FnAbi;
 use crate::concurrency::cpu_affinity::{self, CpuAffinityMask};
 use crate::concurrency::data_race::{self, NaReadType, NaWriteType};
 use crate::concurrency::weak_memory;
+use crate::genmc::GenmcCtx;
 use crate::*;
 
 /// First real-time signal.
@@ -611,6 +612,10 @@ pub struct MiriMachine<'tcx> {
     pub(crate) reject_in_isolation_warned: RefCell<FxHashSet<String>>,
     /// Remembers which int2ptr casts we have already warned about.
     pub(crate) int2ptr_warned: RefCell<FxHashSet<Span>>,
+
+    /// Context for GenMC
+    /// TODO GENMC: document better
+    pub(crate) genmc_ctx: Option<GenmcCtx>,
 }
 
 impl<'tcx> MiriMachine<'tcx> {
@@ -672,6 +677,7 @@ impl<'tcx> MiriMachine<'tcx> {
             thread_cpu_affinity
                 .insert(threads.active_thread(), CpuAffinityMask::new(&layout_cx, config.num_cpus));
         }
+        let genmc_ctx = config.genmc_config.as_ref().map(GenmcCtx::new);
         MiriMachine {
             tcx,
             borrow_tracker,
@@ -757,6 +763,7 @@ impl<'tcx> MiriMachine<'tcx> {
             native_call_mem_warned: Cell::new(false),
             reject_in_isolation_warned: Default::default(),
             int2ptr_warned: Default::default(),
+            genmc_ctx,
         }
     }
 
@@ -877,6 +884,7 @@ impl VisitProvenance for MiriMachine<'_> {
             native_call_mem_warned: _,
             reject_in_isolation_warned: _,
             int2ptr_warned: _,
+            genmc_ctx: _,
         } = self;
 
         threads.visit_provenance(visit);
@@ -1244,6 +1252,10 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
                 .insert(id, (ecx.machine.current_span(), None));
         }
 
+        if let Some(genmc_ctx) = &ecx.machine.genmc_ctx {
+            genmc_ctx.handle_alloc(id, size, align).unwrap(); // TODO GENMC: proper error handling
+        }
+
         interp_ok(AllocExtra {
             borrow_tracker,
             data_race,
@@ -1377,6 +1389,21 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         if let Some(weak_memory) = &alloc_extra.weak_memory {
             weak_memory.memory_accessed(range, machine.data_race.as_ref().unwrap());
         }
+        if let Some(genmc_ctx) = &machine.genmc_ctx {
+            // TODO GENMC: should GenMC be informed about pending memory read? (Might help for scheduling if other thread should run first according to GenMC)
+            // let address = dest.ptr().addr().bits_usize();
+
+            // TODO GENMC: find a better way to get the alloc_id
+            // let address = dest.ptr().addr().bits_usize();
+            let address = alloc_id.0.get().try_into().unwrap(); // TODO GENMC: what is the proper address here?
+            // let ptr: interpret::Pointer<Provenance> = interpret::Pointer::new(place.ptr().provenance.unwrap(), place.ptr().addr());
+            // let size = place.layout.size.bits().try_into().unwrap();
+            // let alloc_id = this.ptr_get_alloc(ptr, size);
+            // let address = range.
+
+            eprintln!("  before_memory_read: alloc_id: {alloc_id:?}, range: {range:?}");
+            genmc_ctx.memory_load(alloc_id, address /* Non-atomic */).unwrap(); // TODO GENMC proper error handling
+        }
         interp_ok(())
     }
 
@@ -1400,6 +1427,12 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         }
         if let Some(weak_memory) = &alloc_extra.weak_memory {
             weak_memory.memory_accessed(range, machine.data_race.as_ref().unwrap());
+        }
+        if let Some(genmc_ctx) = &machine.genmc_ctx {
+            // TODO GENMC: should GenMC be informed about pending memory write?
+            // let address = dest.ptr().addr().bits_usize();
+            let address = alloc_id.0.get().try_into().unwrap(); // TODO GENMC: what is the proper address here?
+            genmc_ctx.memory_store(alloc_id, address /* Non-atomic */).unwrap(); // TODO GENMC proper error handling
         }
         interp_ok(())
     }
@@ -1550,6 +1583,11 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             ecx.run_provenance_gc();
         }
 
+        // TODO GENMC: ask GenMC which thread should be executed next (maybe always preempt here and then ask if it should be re-scheduled)
+        if let Some(genmc_ctx) = &ecx.machine.genmc_ctx {
+            assert!(!genmc_ctx.should_preempt(), "unimplemented: preemption triggered by GenMC");
+        }
+
         // These are our preemption points.
         // (This will only take effect after the terminator has been executed.)
         ecx.maybe_preempt_active_thread();
@@ -1623,6 +1661,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         frame: &Frame<'tcx, Provenance, FrameExtra<'tcx>>,
         local: mir::Local,
     ) -> InterpResult<'tcx> {
+        // TODO GENMC: does GenMC care about local reads/writes?
         if let Some(data_race) = &frame.extra.data_race {
             data_race.local_read(local, &ecx.machine);
         }
@@ -1634,6 +1673,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         local: mir::Local,
         storage_live: bool,
     ) -> InterpResult<'tcx> {
+        // TODO GENMC: does GenMC care about local reads/writes?
         if let Some(data_race) = &ecx.frame().extra.data_race {
             data_race.local_write(local, storage_live, &ecx.machine);
         }
