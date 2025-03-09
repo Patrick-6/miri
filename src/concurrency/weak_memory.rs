@@ -91,6 +91,7 @@ use rustc_data_structures::fx::FxHashMap;
 use super::data_race::{GlobalState as DataRaceState, ThreadClockSet};
 use super::range_object_map::{AccessType, RangeObjectMap};
 use super::vector_clock::{VClock, VTimestamp, VectorIdx};
+use crate::machine::ConcurrencyHandler;
 use crate::*;
 
 pub type AllocState = StoreBufferAlloc;
@@ -173,6 +174,7 @@ impl StoreBufferAlloc {
     /// after all the prior atomic writes so the location no longer needs to exhibit
     /// any weak memory behaviours until further atomic accesses.
     pub fn memory_accessed(&self, range: AllocRange, global: &DataRaceState) {
+        // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
         if !global.ongoing_action_data_race_free() {
             let mut buffers = self.store_buffers.borrow_mut();
             let access_type = buffers.access_type(range);
@@ -458,9 +460,14 @@ pub(super) trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     ) -> InterpResult<'tcx> {
         let this = self.eval_context_mut();
         let (alloc_id, base_offset, ..) = this.ptr_get_alloc_id(place.ptr(), 0)?;
+        // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
         if let (
             crate::AllocExtra { weak_memory: Some(alloc_buffers), .. },
-            crate::MiriMachine { data_race: Some(global), threads, .. },
+            crate::MiriMachine {
+                concurrency_handler: ConcurrencyHandler::DataRace(global),
+                threads,
+                ..
+            },
         ) = this.get_alloc_extra_mut(alloc_id)?
         {
             if atomic == AtomicRwOrd::SeqCst {
@@ -484,7 +491,8 @@ pub(super) trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     ) -> InterpResult<'tcx, Option<Scalar>> {
         let this = self.eval_context_ref();
         'fallback: {
-            if let Some(global) = &this.machine.data_race {
+            // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
+            if let Some(global) = this.machine.concurrency_handler.as_data_race_ref() {
                 let (alloc_id, base_offset, ..) = this.ptr_get_alloc_id(place.ptr(), 0)?;
                 if let Some(alloc_buffers) = this.get_alloc_extra(alloc_id)?.weak_memory.as_ref() {
                     if atomic == AtomicReadOrd::SeqCst {
@@ -533,9 +541,14 @@ pub(super) trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     ) -> InterpResult<'tcx> {
         let this = self.eval_context_mut();
         let (alloc_id, base_offset, ..) = this.ptr_get_alloc_id(dest.ptr(), 0)?;
+        // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
         if let (
             crate::AllocExtra { weak_memory: Some(alloc_buffers), .. },
-            crate::MiriMachine { data_race: Some(global), threads, .. },
+            crate::MiriMachine {
+                concurrency_handler: ConcurrencyHandler::DataRace(global),
+                threads,
+                ..
+            },
         ) = this.get_alloc_extra_mut(alloc_id)?
         {
             if atomic == AtomicWriteOrd::SeqCst {
@@ -561,7 +574,8 @@ pub(super) trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     ) -> InterpResult<'tcx> {
         let this = self.eval_context_ref();
 
-        if let Some(global) = &this.machine.data_race {
+        // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
+        if let Some(global) = this.machine.concurrency_handler.as_data_race_ref() {
             if atomic == AtomicReadOrd::SeqCst {
                 global.sc_read(&this.machine.threads);
             }

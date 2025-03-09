@@ -84,6 +84,7 @@ mod clock;
 mod concurrency;
 mod diagnostics;
 mod eval;
+mod genmc;
 mod helpers;
 mod intrinsics;
 mod machine;
@@ -158,6 +159,8 @@ pub use crate::shims::os_str::EvalContextExt as _;
 pub use crate::shims::panic::{CatchUnwindData, EvalContextExt as _};
 pub use crate::shims::time::EvalContextExt as _;
 pub use crate::shims::tls::TlsData;
+
+pub use crate::genmc::GenmcCtx;
 
 /// Insert rustc arguments at the beginning of the argument list that Miri wants to be
 /// set per default, for maximal validation power.

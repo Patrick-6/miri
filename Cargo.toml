@@ -26,6 +26,7 @@ measureme = "11"
 chrono = { version = "0.4.38", default-features = false }
 chrono-tz = "0.10"
 directories = "5"
+cxx = { version = "1.0.143", features = ["c++20"] }
 
 # Copied from `compiler/rustc/Cargo.toml`.
 # But only for some targets, it fails for others. Rustc configures this in its CI, but we can't
@@ -70,6 +71,10 @@ stack-cache-consistency-check = ["stack-cache"]
 [lints.rust.unexpected_cfgs]
 level = "warn"
 check-cfg = ['cfg(bootstrap)']
+
+[build-dependencies]
+cxx-build = "1.0.143" # TODO GENMC: try feature 'parallel'
+walkdir = "2.5.0"
 
 # Be aware that this file is inside a workspace when used via the
 # submodule in the rustc repo. That means there are many cargo features
