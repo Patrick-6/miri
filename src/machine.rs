@@ -6,6 +6,7 @@ use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::hash_map::Entry;
 use std::path::Path;
+use std::rc::Rc;
 use std::{fmt, process};
 
 use rand::rngs::StdRng;
@@ -27,9 +28,11 @@ use rustc_span::def_id::{CrateNum, DefId};
 use rustc_span::{Span, SpanData, Symbol};
 use rustc_target::callconv::FnAbi;
 
+use crate::alloc_addresses::EvalContextExt;
 use crate::concurrency::cpu_affinity::{self, CpuAffinityMask};
 use crate::concurrency::data_race::{self, NaReadType, NaWriteType};
 use crate::concurrency::weak_memory;
+use crate::genmc::GenmcCtx;
 use crate::*;
 
 /// First real-time signal.
@@ -436,6 +439,50 @@ impl<'tcx> PrimitiveLayouts<'tcx> {
     }
 }
 
+// TODO GENMC: move this to some better place
+pub enum ConcurrencyHandler {
+    None,
+    DataRace(Box<data_race::GlobalState>), // TODO: check if/how this affects performance (vs non-boxed)
+    GenMC(Rc<GenmcCtx>),
+}
+
+impl ConcurrencyHandler {
+    pub fn is_none(&self) -> bool {
+        matches!(self, ConcurrencyHandler::None)
+    }
+
+    pub fn as_data_race_ref(&self) -> Option<&data_race::GlobalState> {
+        if let Self::DataRace(data_race) = self { Some(data_race) } else { None }
+    }
+
+    pub fn as_data_race_mut(&mut self) -> Option<&mut data_race::GlobalState> {
+        if let Self::DataRace(data_race) = self { Some(data_race) } else { None }
+    }
+
+    pub fn as_genmc_ref(&self) -> Option<&GenmcCtx> {
+        if let Self::GenMC(genmc_ctx) = self { Some(genmc_ctx) } else { None }
+    }
+
+    // pub fn as_genmc_mut(&mut self) -> Option<&mut GenmcCtx> {
+    //     if let Self::GenMC(genmc_ctx) = self { Some(genmc_ctx) } else { None }
+    // }
+}
+
+impl VisitProvenance for ConcurrencyHandler {
+    fn visit_provenance(&self, visit: &mut VisitWith<'_>) {
+        match self {
+            ConcurrencyHandler::None => {}
+            ConcurrencyHandler::DataRace(data_race) => data_race.visit_provenance(visit),
+            ConcurrencyHandler::GenMC(_genmc_ctx) => {
+                // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
+                eprintln!(
+                    "MIRI: TODO GENMC: visit_provenance called on GenmcCtx, check if anything needs to be done here"
+                );
+            }
+        }
+    }
+}
+
 /// The machine itself.
 ///
 /// If you add anything here that stores machine values, remember to update
@@ -447,8 +494,10 @@ pub struct MiriMachine<'tcx> {
     /// Global data for borrow tracking.
     pub borrow_tracker: Option<borrow_tracker::GlobalState>,
 
-    /// Data race detector global data.
-    pub data_race: Option<data_race::GlobalState>,
+    /// Depending on settings, this will be `None`,
+    /// global data for a data race detector,
+    /// or the context required for running in GenMC mode.
+    pub concurrency_handler: ConcurrencyHandler,
 
     /// Ptr-int-cast module global data.
     pub alloc_addresses: alloc_addresses::GlobalState,
@@ -614,7 +663,11 @@ pub struct MiriMachine<'tcx> {
 }
 
 impl<'tcx> MiriMachine<'tcx> {
-    pub(crate) fn new(config: &MiriConfig, layout_cx: LayoutCx<'tcx>) -> Self {
+    pub(crate) fn new(
+        config: &MiriConfig,
+        layout_cx: LayoutCx<'tcx>,
+        genmc_ctx: Option<Rc<GenmcCtx>>,
+    ) -> Self {
         let tcx = layout_cx.tcx();
         let local_crates = helpers::get_local_crates(tcx);
         let layouts =
@@ -633,7 +686,19 @@ impl<'tcx> MiriMachine<'tcx> {
         });
         let rng = StdRng::seed_from_u64(config.seed.unwrap_or(0));
         let borrow_tracker = config.borrow_tracker.map(|bt| bt.instantiate_global_state(config));
-        let data_race = config.data_race_detector.then(|| data_race::GlobalState::new(config));
+        let concurrency_handler = match (config.data_race_detector, genmc_ctx) {
+            (false, None) => ConcurrencyHandler::None,
+            (true, None) =>
+                ConcurrencyHandler::DataRace(Box::new(data_race::GlobalState::new(config))),
+            (data_race_detector, Some(genmc_ctx)) => {
+                if data_race_detector {
+                    eprintln!(
+                        "NOTE: In GenMC mode, the data race detection is handled by GenMC instead and cannot be turned off"
+                    ); // TODO GENMC: use proper Miri logging mechanism
+                }
+                ConcurrencyHandler::GenMC(genmc_ctx)
+            }
+        };
         // Determine page size, stack address, and stack size.
         // These values are mostly meaningless, but the stack address is also where we start
         // allocating physical integer addresses for all allocations.
@@ -675,7 +740,7 @@ impl<'tcx> MiriMachine<'tcx> {
         MiriMachine {
             tcx,
             borrow_tracker,
-            data_race,
+            concurrency_handler,
             alloc_addresses: RefCell::new(alloc_addresses::GlobalStateInner::new(config, stack_addr)),
             // `env_vars` depends on a full interpreter so we cannot properly initialize it yet.
             env_vars: EnvVars::default(),
@@ -832,7 +897,8 @@ impl<'tcx> MiriMachine<'tcx> {
             .as_ref()
             .map(|bt| bt.borrow_mut().new_allocation(id, size, kind, &ecx.machine));
 
-        let data_race = ecx.machine.data_race.as_ref().map(|data_race| {
+        // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
+        let data_race = ecx.machine.concurrency_handler.as_data_race_ref().map(|data_race| {
             data_race::AllocState::new_allocation(
                 data_race,
                 &ecx.machine.threads,
@@ -885,7 +951,7 @@ impl VisitProvenance for MiriMachine<'_> {
             extern_statics,
             dirs,
             borrow_tracker,
-            data_race,
+            concurrency_handler: data_race,
             alloc_addresses,
             fds,
             epoll_interests:_,
@@ -1380,8 +1446,30 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         if let Some(borrow_tracker) = &alloc_extra.borrow_tracker {
             borrow_tracker.before_memory_read(alloc_id, prov_extra, range, machine)?;
         }
-        if let Some(weak_memory) = &alloc_extra.weak_memory {
-            weak_memory.memory_accessed(range, machine.data_race.as_ref().unwrap());
+        if let Some(_weak_memory) = &alloc_extra.weak_memory {
+            // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
+            eprintln!("MIRI: TODO GENMC: weak_memory check skipped");
+            // weak_memory
+            //     .memory_accessed(range, machine.concurrency_handler.as_data_race_ref().unwrap());
+        }
+        // TODO GENMC: combine this with code for the data race checker (if any)
+        if let Some(genmc_ctx) = machine.concurrency_handler.as_genmc_ref() {
+            // TODO GENMC: should GenMC be informed about pending memory read? (Might help for scheduling if other thread should run first according to GenMC)
+            // let address = dest.ptr().addr().bits_usize();
+
+            // TODO GENMC: find a better way to get the alloc_id
+            // let address = dest.ptr().addr().bits_usize();
+            let address = alloc_id.0.get().try_into().unwrap(); // TODO GENMC: what is the proper address here?
+            // let ptr: interpret::Pointer<Provenance> = interpret::Pointer::new(place.ptr().provenance.unwrap(), place.ptr().addr());
+            // let size = place.layout.size.bits().try_into().unwrap();
+            // let alloc_id = this.ptr_get_alloc(ptr, size);
+            // let address = range.
+
+            // machine.alloc_addresses.borrow().addr_from_alloc_id(alloc_id, alloc_extra);
+            let size = range.size.bytes_usize();
+
+            // let _read_value =
+            genmc_ctx.memory_load(machine, alloc_id, address, size).unwrap(); // TODO GENMC proper error handling
         }
         interp_ok(())
     }
@@ -1405,8 +1493,19 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         if let Some(borrow_tracker) = &mut alloc_extra.borrow_tracker {
             borrow_tracker.before_memory_write(alloc_id, prov_extra, range, machine)?;
         }
-        if let Some(weak_memory) = &alloc_extra.weak_memory {
-            weak_memory.memory_accessed(range, machine.data_race.as_ref().unwrap());
+        if let Some(_weak_memory) = &alloc_extra.weak_memory {
+            // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
+            eprintln!("MIRI: TODO GENMC: weak_memory check skipped");
+            // weak_memory
+            //     .memory_accessed(range, machine.concurrency_handler.as_data_race_ref().unwrap());
+        }
+        // TODO GENMC: combined this with code for the data race checker (if any)
+        if let Some(genmc_ctx) = machine.concurrency_handler.as_genmc_ref() {
+            // TODO GENMC: should GenMC be informed about pending memory write?
+            // machine.alloc_addresses.borrow().addr_from_alloc_id(alloc_id,)
+            let address = alloc_id.0.get().try_into().unwrap(); // TODO GENMC: what is the proper address here?
+            let size = range.size.bytes_usize();
+            genmc_ctx.memory_store(machine, alloc_id, address, size).unwrap(); // TODO GENMC proper error handling
         }
         interp_ok(())
     }
@@ -1442,6 +1541,13 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             *deallocated_at = Some(machine.current_span());
         }
         machine.free_alloc_id(alloc_id, size, align, kind);
+
+        // TODO GENMC: inform GenMC about the free
+        // TODO GENMC: combined this with code for the data race checker (if any)
+        if let Some(genmc_ctx) = machine.concurrency_handler.as_genmc_ref() {
+            genmc_ctx.handle_dealloc(machine, alloc_id, size, align, kind).unwrap();
+        }
+
         interp_ok(())
     }
 
@@ -1513,13 +1619,18 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
 
         let borrow_tracker = ecx.machine.borrow_tracker.as_ref();
 
+        // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
         let extra = FrameExtra {
             borrow_tracker: borrow_tracker.map(|bt| bt.borrow_mut().new_frame()),
             catch_unwind: None,
             timing,
             is_user_relevant: ecx.machine.is_user_relevant(&frame),
             salt: ecx.machine.rng.borrow_mut().random_range(0..ADDRS_PER_ANON_GLOBAL),
-            data_race: ecx.machine.data_race.as_ref().map(|_| data_race::FrameState::default()),
+            data_race: ecx
+                .machine
+                .concurrency_handler
+                .as_data_race_ref()
+                .map(|_| data_race::FrameState::default()),
         };
 
         interp_ok(frame.with_extra(extra))
@@ -1631,6 +1742,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         frame: &Frame<'tcx, Provenance, FrameExtra<'tcx>>,
         local: mir::Local,
     ) -> InterpResult<'tcx> {
+        // TODO GENMC: does GenMC care about local reads/writes?
         if let Some(data_race) = &frame.extra.data_race {
             data_race.local_read(local, &ecx.machine);
         }
@@ -1642,6 +1754,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         local: mir::Local,
         storage_live: bool,
     ) -> InterpResult<'tcx> {
+        // TODO GENMC: does GenMC care about local reads/writes?
         if let Some(data_race) = &ecx.frame().extra.data_race {
             data_race.local_write(local, storage_live, &ecx.machine);
         }

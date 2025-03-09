@@ -154,9 +154,35 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
         alloc_id: AllocId,
         memory_kind: MemoryKind,
     ) -> InterpResult<'tcx, u64> {
+        eprintln!(
+            "TODO GENMC: DEBUG: addr_from_alloc_id_uncached called ({alloc_id:?}, memory_kind: {memory_kind:?})."
+        );
         let this = self.eval_context_ref();
-        let mut rng = this.machine.rng.borrow_mut();
         let info = this.get_alloc_info(alloc_id);
+
+        // TODO GENMC: let GenMC choose the addresses (and document why this is done this way)
+        // TODO GENMC: document why this is here (because address of allocation not known in `init_alloc_extra`)
+        // TODO GENMC: `this` is not mutably borrowed here, so we can't mutably borrow the `concurrency_handler`, need to rethink this (maybe change the function signature)
+        if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
+            // if info.size.bytes() == 0 {
+            //     let alignment = info.align.bytes();
+            //     let addr = 1024 + alignment;
+            //     let offset = addr % alignment;
+            //     let addr = addr - offset;
+            //     assert_eq!(0, addr % alignment);
+            //     eprintln!(
+            //         "MIRI: TODO GENMC: giving all ZSTs a fixed address for now (addr: {addr}, size: {:?}, align: {:?})",
+            //         info.size, info.align
+            //     );
+            //     return interp_ok(addr);
+            // }
+            let addr =
+                genmc_ctx.handle_alloc(&this.machine, alloc_id, info.size, info.align).unwrap(); // TODO GENMC: proper error handling
+            eprintln!("addr_from_alloc_id_uncached: {alloc_id:?} --> {addr}");
+            return interp_ok(addr);
+        }
+
+        let mut rng = this.machine.rng.borrow_mut();
         // This is either called immediately after allocation (and then cached), or when
         // adjusting `tcx` pointers (which never get freed). So assert that we are looking
         // at a live allocation. This also ensures that we never re-assign an address to an
@@ -477,7 +503,8 @@ impl<'tcx> MiriMachine<'tcx> {
         // Also remember this address for future reuse.
         let thread = self.threads.active_thread();
         global_state.reuse.add_addr(rng, addr, size, align, kind, thread, || {
-            if let Some(data_race) = &self.data_race {
+            if let Some(data_race) = &self.concurrency_handler.as_data_race_ref() {
+                // TODO GENMC: does GenMC need to be informed about this?
                 data_race.release_clock(&self.threads, |clock| clock.clone())
             } else {
                 VClock::default()
