@@ -140,17 +140,6 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         // Perform regular store.
         this.write_scalar(val, dest)?;
 
-        // Inform GenMC about the atomic load.
-        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
-            // TODO GENMC: find a better way to get the alloc_id
-            let address = dest.ptr().addr().bits_usize();
-            let ptr: interpret::Pointer<Provenance> = interpret::Pointer::new(place.ptr().provenance.unwrap(), place.ptr().addr());
-            let size = place.layout.size.bits().try_into().unwrap();
-            let (alloc_id, _) = this.ptr_get_alloc(ptr, size).unwrap();
-            
-            genmc_ctx.atomic_load(alloc_id, address, atomic).unwrap(); // TODO GENMC proper error handling
-        }
-
         interp_ok(())
     }
 
@@ -165,16 +154,6 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         // Perform atomic store
         this.write_scalar_atomic(val, &place, atomic)?;
 
-        // Inform GenMC about the atomic store.
-        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
-            // TODO GENMC: find a better way to get the alloc_id
-            let address = place.ptr().addr().bits_usize();
-            let ptr: interpret::Pointer<Provenance> = interpret::Pointer::new(place.ptr().provenance.unwrap(), place.ptr().addr());
-            let size = place.layout.size.bits().try_into().unwrap();
-            let (alloc_id, _) = this.ptr_get_alloc(ptr, size).unwrap();
-
-            genmc_ctx.atomic_store(alloc_id, address, atomic).unwrap(); // TODO GENMC proper error handling
-        }
         interp_ok(())
     }
 

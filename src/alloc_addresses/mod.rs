@@ -154,91 +154,103 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
         alloc_id: AllocId,
         memory_kind: MemoryKind,
     ) -> InterpResult<'tcx, u64> {
+        eprintln!(
+            "TODO GENMC: DEBUG: addr_from_alloc_id_uncached called ({alloc_id:?}, memory_kind: {memory_kind:?})."
+        );
         let this = self.eval_context_ref();
-        let mut rng = this.machine.rng.borrow_mut();
         let info = this.get_alloc_info(alloc_id);
-        // This is either called immediately after allocation (and then cached), or when
-        // adjusting `tcx` pointers (which never get freed). So assert that we are looking
-        // at a live allocation. This also ensures that we never re-assign an address to an
-        // allocation that previously had an address, but then was freed and the address
-        // information was removed.
-        assert!(!matches!(info.kind, AllocKind::Dead));
+        let addr: u64 = {
+            let mut rng = this.machine.rng.borrow_mut();
+            // This is either called immediately after allocation (and then cached), or when
+            // adjusting `tcx` pointers (which never get freed). So assert that we are looking
+            // at a live allocation. This also ensures that we never re-assign an address to an
+            // allocation that previously had an address, but then was freed and the address
+            // information was removed.
+            assert!(!matches!(info.kind, AllocKind::Dead));
 
-        // This allocation does not have a base address yet, pick or reuse one.
-        if this.machine.native_lib.is_some() {
-            // In native lib mode, we use the "real" address of the bytes for this allocation.
-            // This ensures the interpreted program and native code have the same view of memory.
-            let base_ptr = match info.kind {
-                AllocKind::LiveData => {
-                    if this.tcx.try_get_global_alloc(alloc_id).is_some() {
-                        // For new global allocations, we always pre-allocate the memory to be able use the machine address directly.
-                        let prepared_bytes = MiriAllocBytes::zeroed(info.size, info.align)
+            // This allocation does not have a base address yet, pick or reuse one.
+            if this.machine.native_lib.is_some() {
+                // In native lib mode, we use the "real" address of the bytes for this allocation.
+                // This ensures the interpreted program and native code have the same view of memory.
+                let base_ptr = match info.kind {
+                    AllocKind::LiveData => {
+                        if this.tcx.try_get_global_alloc(alloc_id).is_some() {
+                            // For new global allocations, we always pre-allocate the memory to be able use the machine address directly.
+                            let prepared_bytes = MiriAllocBytes::zeroed(info.size, info.align)
                             .unwrap_or_else(|| {
                                 panic!("Miri ran out of memory: cannot create allocation of {size:?} bytes", size = info.size)
                             });
-                        let ptr = prepared_bytes.as_ptr();
-                        // Store prepared allocation space to be picked up for use later.
-                        global_state
-                            .prepared_alloc_bytes
-                            .try_insert(alloc_id, prepared_bytes)
-                            .unwrap();
-                        ptr
-                    } else {
-                        this.get_alloc_bytes_unchecked_raw(alloc_id)?
+                            let ptr = prepared_bytes.as_ptr();
+                            // Store prepared allocation space to be picked up for use later.
+                            global_state
+                                .prepared_alloc_bytes
+                                .try_insert(alloc_id, prepared_bytes)
+                                .unwrap();
+                            ptr
+                        } else {
+                            this.get_alloc_bytes_unchecked_raw(alloc_id)?
+                        }
                     }
-                }
-                AllocKind::Function | AllocKind::VTable => {
-                    // Allocate some dummy memory to get a unique address for this function/vtable.
-                    let alloc_bytes =
-                        MiriAllocBytes::from_bytes(&[0u8; 1], Align::from_bytes(1).unwrap());
-                    let ptr = alloc_bytes.as_ptr();
-                    // Leak the underlying memory to ensure it remains unique.
-                    std::mem::forget(alloc_bytes);
-                    ptr
-                }
-                AllocKind::Dead => unreachable!(),
-            };
-            // Ensure this pointer's provenance is exposed, so that it can be used by FFI code.
-            return interp_ok(base_ptr.expose_provenance().try_into().unwrap());
-        }
-        // We are not in native lib mode, so we control the addresses ourselves.
-        if let Some((reuse_addr, clock)) = global_state.reuse.take_addr(
-            &mut *rng,
-            info.size,
-            info.align,
-            memory_kind,
-            this.active_thread(),
-        ) {
-            if let Some(clock) = clock {
-                this.acquire_clock(&clock);
-            }
-            interp_ok(reuse_addr)
-        } else {
-            // We have to pick a fresh address.
-            // Leave some space to the previous allocation, to give it some chance to be less aligned.
-            // We ensure that `(global_state.next_base_addr + slack) % 16` is uniformly distributed.
-            let slack = rng.random_range(0..16);
-            // From next_base_addr + slack, round up to adjust for alignment.
-            let base_addr = global_state
-                .next_base_addr
-                .checked_add(slack)
-                .ok_or_else(|| err_exhaust!(AddressSpaceFull))?;
-            let base_addr = align_addr(base_addr, info.align.bytes());
+                    AllocKind::Function | AllocKind::VTable => {
+                        // Allocate some dummy memory to get a unique address for this function/vtable.
+                        let alloc_bytes =
+                            MiriAllocBytes::from_bytes(&[0u8; 1], Align::from_bytes(1).unwrap());
+                        let ptr = alloc_bytes.as_ptr();
+                        // Leak the underlying memory to ensure it remains unique.
+                        std::mem::forget(alloc_bytes);
+                        ptr
+                    }
+                    AllocKind::Dead => unreachable!(),
+                };
+                // Ensure this pointer's provenance is exposed, so that it can be used by FFI code.
+                base_ptr.expose_provenance().try_into().unwrap()
+            } else {
+                // We are not in native lib mode, so we control the addresses ourselves.
+                if let Some((reuse_addr, clock)) = global_state.reuse.take_addr(
+                    &mut *rng,
+                    info.size,
+                    info.align,
+                    memory_kind,
+                    this.active_thread(),
+                ) {
+                    if let Some(clock) = clock {
+                        this.acquire_clock(&clock);
+                    }
+                    reuse_addr
+                } else {
+                    // We have to pick a fresh address.
+                    // Leave some space to the previous allocation, to give it some chance to be less aligned.
+                    // We ensure that `(global_state.next_base_addr + slack) % 16` is uniformly distributed.
+                    let slack = rng.random_range(0..16);
+                    // From next_base_addr + slack, round up to adjust for alignment.
+                    let base_addr = global_state
+                        .next_base_addr
+                        .checked_add(slack)
+                        .ok_or_else(|| err_exhaust!(AddressSpaceFull))?;
+                    let base_addr = align_addr(base_addr, info.align.bytes());
 
-            // Remember next base address.  If this allocation is zero-sized, leave a gap of at
-            // least 1 to avoid two allocations having the same base address. (The logic in
-            // `alloc_id_from_addr` assumes unique addresses, and different function/vtable pointers
-            // need to be distinguishable!)
-            global_state.next_base_addr = base_addr
-                .checked_add(max(info.size.bytes(), 1))
-                .ok_or_else(|| err_exhaust!(AddressSpaceFull))?;
-            // Even if `Size` didn't overflow, we might still have filled up the address space.
-            if global_state.next_base_addr > this.target_usize_max() {
-                throw_exhaust!(AddressSpaceFull);
-            }
+                    // Remember next base address.  If this allocation is zero-sized, leave a gap of at
+                    // least 1 to avoid two allocations having the same base address. (The logic in
+                    // `alloc_id_from_addr` assumes unique addresses, and different function/vtable pointers
+                    // need to be distinguishable!)
+                    global_state.next_base_addr = base_addr
+                        .checked_add(max(info.size.bytes(), 1))
+                        .ok_or_else(|| err_exhaust!(AddressSpaceFull))?;
+                    // Even if `Size` didn't overflow, we might still have filled up the address space.
+                    if global_state.next_base_addr > this.target_usize_max() {
+                        throw_exhaust!(AddressSpaceFull);
+                    }
 
-            interp_ok(base_addr)
+                    base_addr
+                }
+            }
+        };
+        eprintln!("addr_from_alloc_id_uncached: {alloc_id:?} --> {addr}");
+        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
+            let requested_address = addr.try_into().unwrap();
+            genmc_ctx.handle_alloc(alloc_id, requested_address, info.size, info.align).unwrap(); // TODO GENMC: proper error handling
         }
+        interp_ok(addr)
     }
 
     fn addr_from_alloc_id(

@@ -27,6 +27,7 @@ use rustc_span::def_id::{CrateNum, DefId};
 use rustc_span::{Span, SpanData, Symbol};
 use rustc_target::callconv::FnAbi;
 
+use crate::alloc_addresses::EvalContextExt;
 use crate::concurrency::cpu_affinity::{self, CpuAffinityMask};
 use crate::concurrency::data_race::{self, NaReadType, NaWriteType};
 use crate::concurrency::weak_memory;
@@ -1252,9 +1253,58 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
                 .insert(id, (ecx.machine.current_span(), None));
         }
 
-        if let Some(genmc_ctx) = &ecx.machine.genmc_ctx {
-            genmc_ctx.handle_alloc(id, size, align).unwrap(); // TODO GENMC: proper error handling
-        }
+        // TODO GENMC: HACK: GenMC needs to pointer of the allocation, this is a hack for now:
+        // 'GenMC: {
+        //     if let Some(genmc_ctx) = &ecx.machine.genmc_ctx {
+        //         // let address = ecx.addr_from_alloc_id(id);
+        //         // let address = ecx.machine.alloc_addresses.borrow();
+        //         // ecx.ptr_get_alloc(ptr, size)
+        //         let ptr = id.into();
+        //         // eprintln!("alloc_addresses.base_addr: {:?}", ecx.machine.alloc_addresses.borrow().base_addr );
+        //         // let requested_address = *ecx.machine.alloc_addresses.borrow().base_addr.get(&id).unwrap();
+        //         // let requested_address = requested_address.try_into().unwrap();
+        //         eprintln!("in init_alloc_extra: {id:?}, kind: {kind:?}");
+        //         match kind {
+        //             interpret::MemoryKind::Stack => {
+        //                 eprintln!(
+        //                     "in init_alloc_extra: SKIP informing GenMC for: {id:?}, kind: {kind:?}"
+        //                 );
+        //             }
+        //             interpret::MemoryKind::CallerLocation => {
+        //                 eprintln!(
+        //                     "in init_alloc_extra: SKIP informing GenMC for: {id:?}, kind: {kind:?}"
+        //                 );
+        //             }
+        //             interpret::MemoryKind::Machine(memory_kind) => {
+        //                 use MiriMemoryKind::*;
+        //                 match memory_kind {
+        //                     ExternStatic | Runtime | Machine => {
+        //                         eprintln!(
+        //                             "in init_alloc_extra: SKIP informing GenMC for: {id:?}, kind: {kind:?}"
+        //                         );
+        //                         break 'GenMC;
+        //                     }
+        //                     _ => {} // Rust => todo!(),
+        //                             // Miri => todo!(),
+        //                             // C => todo!(),
+        //                             // WinHeap => todo!(),
+        //                             // WinLocal => todo!(),
+        //                             // Runtime => todo!(),
+        //                             // Global => todo!(),
+        //                             // Tls => todo!(),
+        //                             // Mmap => todo!(),
+        //                 }
+        //                 let root_pointer = ecx.global_root_pointer(ptr).unwrap();
+        //                 // TODO GENMC: This is probably incorrect, since `into_parts` shouldn't be called here:
+        //                 let (_, requested_address) = root_pointer.into_parts();
+        //                 let requested_address = requested_address.bytes_usize();
+
+        //                 // let requested_address = 42; // TODO GENMC: get base address of AllocId
+        //                 genmc_ctx.handle_alloc(id, requested_address, size, align).unwrap(); // TODO GENMC: proper error handling
+        //             }
+        //         }
+        //     }
+        // }
 
         interp_ok(AllocExtra {
             borrow_tracker,
@@ -1358,6 +1408,8 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         alloc: &'b Allocation,
     ) -> InterpResult<'tcx, Cow<'b, Allocation<Self::Provenance, Self::AllocExtra, Self::Bytes>>>
     {
+        eprintln!("TODO GENMC: DEBUG: adjust_global_allocation called.");
+
         let kind = Self::GLOBAL_KIND.unwrap().into();
         let alloc = alloc.adjust_from_tcx(
             &ecx.tcx,
@@ -1401,8 +1453,11 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             // let alloc_id = this.ptr_get_alloc(ptr, size);
             // let address = range.
 
-            eprintln!("  before_memory_read: alloc_id: {alloc_id:?}, range: {range:?}");
-            genmc_ctx.memory_load(alloc_id, address /* Non-atomic */).unwrap(); // TODO GENMC proper error handling
+            // machine.alloc_addresses.borrow().addr_from_alloc_id(alloc_id, alloc_extra);
+            let size = range.size.bytes_usize();
+
+            // let _read_value =
+            genmc_ctx.memory_load(alloc_id, address, size).unwrap(); // TODO GENMC proper error handling
         }
         interp_ok(())
     }
@@ -1430,9 +1485,10 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         }
         if let Some(genmc_ctx) = &machine.genmc_ctx {
             // TODO GENMC: should GenMC be informed about pending memory write?
-            // let address = dest.ptr().addr().bits_usize();
+            // machine.alloc_addresses.borrow().addr_from_alloc_id(alloc_id,)
             let address = alloc_id.0.get().try_into().unwrap(); // TODO GENMC: what is the proper address here?
-            genmc_ctx.memory_store(alloc_id, address /* Non-atomic */).unwrap(); // TODO GENMC proper error handling
+            let size = range.size.bytes_usize();
+            genmc_ctx.memory_store(alloc_id, address, size).unwrap(); // TODO GENMC proper error handling
         }
         interp_ok(())
     }
@@ -1467,6 +1523,12 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             *deallocated_at = Some(machine.current_span());
         }
         machine.free_alloc_id(alloc_id, size, align, kind);
+
+        // TODO GENMC: inform GenMC about the free
+        if let Some(genmc_ctx) = &machine.genmc_ctx {
+            genmc_ctx.handle_dealloc(alloc_id, size, align, kind).unwrap();
+        }
+
         interp_ok(())
     }
 

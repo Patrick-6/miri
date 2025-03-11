@@ -700,7 +700,24 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         let buffered_scalar = this.buffered_atomic_read(place, atomic, scalar, || {
             this.validate_atomic_load(place, atomic)
         })?;
-        interp_ok(buffered_scalar.ok_or_else(|| err_ub!(InvalidUninitBytes(None)))?)
+        let value = buffered_scalar.ok_or_else(|| err_ub!(InvalidUninitBytes(None)))?;
+
+        // Inform GenMC about the atomic load.
+        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
+            // TODO GENMC: find a better way to get the alloc_id
+            let ptr = place.ptr();
+            let address = ptr.addr().bytes_usize();
+            let size = place.layout.size.bytes().try_into().unwrap();
+            // let alloc_id = this.ptr_get_alloc(ptr, size).unwrap();
+    
+            let ptr: interpret::Pointer<Provenance> = interpret::Pointer::new(ptr.provenance.unwrap(), ptr.addr());
+            let (alloc_id, _) = this.ptr_get_alloc(ptr, size).unwrap();
+            
+            let size = place.layout.size.bytes_usize();
+            genmc_ctx.atomic_load(alloc_id, address, size, atomic).unwrap(); // TODO GENMC proper error handling
+        }
+
+        interp_ok(value)
     }
 
     /// Perform an atomic write operation at the memory location.
@@ -720,6 +737,19 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         let old_val = this.run_for_validation(|this| this.read_scalar(dest)).discard_err();
         this.allow_data_races_mut(move |this| this.write_scalar(val, dest))?;
         this.validate_atomic_store(dest, atomic)?;
+
+        // Inform GenMC about the atomic store.
+        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
+            // TODO GENMC: find a better way to get the alloc_id
+            let address = dest.ptr().addr().bytes_usize();
+            let size = dest.layout.size.bytes().try_into().unwrap();
+            let ptr: interpret::Pointer<Provenance> = interpret::Pointer::new(dest.ptr().provenance.unwrap(), dest.ptr().addr());
+            let (alloc_id, _) = this.ptr_get_alloc(ptr, size).unwrap();
+
+            let size = dest.layout.size.bytes_usize();
+            genmc_ctx.atomic_store(alloc_id, address, size, val, atomic).unwrap(); // TODO GENMC proper error handling
+        }
+
         this.buffered_atomic_write(val, dest, atomic, old_val)
     }
 

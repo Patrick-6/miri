@@ -52,12 +52,10 @@ fn main() {
     );
     std::env::set_current_dir("../").unwrap();
 
-    // let paths =
     cxx_build::bridge("src/genmc/mod.rs")
         .cpp(true)
         .warnings(false) // TODO GENMC: try to fix some of those warnings
         .std("c++20")
-        // .cpp_link_stdlib("stdc++") // returns a cc::Build
         .include("./genmc")
         // .include("./genmc/include") // For GenMC tests, DO NOT INCLUDE!!
         .include("./genmc/src")
@@ -65,40 +63,8 @@ fn main() {
         .flag("-lffi")
         .flag("-ldl")
         .flag("-lLLVM-19")
-        // .file()
         .file("./genmc/src/Verification/MiriInterface.hpp")
-        // .compile_intermediates();
-    .compile("genmc_interop");
-
-    // // TODO GENMC: does it matter to rustc if include paths are repeated?
-    // // let mut prefixes = FxHashSet::default();
-    // // println!("cargo::error={:?}, {paths:?}", paths.len());
-    // for path in paths {
-    //     // let lib = path.to_str().expect("cannot convert path to string");
-    //     if let Some(parent) = path.parent() {
-    //         let prefix = parent.to_str().expect("cannot convert path to string");
-    //         // prefixes.insert(prefix);
-
-    //         // TODO: remove after debugging:
-    //         println!("cargo::warning=Include path: '{prefix}'");
-    //         println!("cargo::rustc-link-search={prefix}");
-    //     }
-    //     let lib_file = path
-    //         .file_name()
-    //         .expect("cannot get library file name")
-    //         .to_str()
-    //         .expect("cannot convert file name to string");
-
-    //     // TODO: remove after debugging:
-    //     assert_eq!(".o", &lib_file[lib_file.len() - 2..]);
-    //     let lib = &lib_file[..lib_file.len() - 2];
-    //     println!("cargo::warning=Extra library file: '{lib_file}' --> '{lib}'");
-    //     println!("cargo::rustc-link-lib={lib}");
-    // }
-
-    // for prefix in prefixes {
-    //     println!("cargo::rustc-link-search=native={prefix}");
-    // }
+        .compile("genmc_interop");
 
     // Simply link the library without using pkg-config
     // println!("cargo:rustc-link-search=native={}", dst.display());
@@ -117,11 +83,8 @@ fn main() {
     // println!("cargo:rerun-if-changed=genmc/src/Verification/MiriInterface.hpp");
     // Recursively walk the directory
 
-    let extensions= ["cpp", "cc", "hpp", "h", "c"].map(os_str::OsStr::new);
-    for entry in WalkDir::new(GENMC_PATH)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+    let extensions = ["cpp", "cc", "hpp", "h", "c"].map(os_str::OsStr::new);
+    for entry in WalkDir::new(GENMC_PATH).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
         if path.is_file() && path.extension().is_some_and(|ext| extensions.contains(&ext)) {
             println!("cargo::rerun-if-changed={}", path.display());
