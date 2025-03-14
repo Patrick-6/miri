@@ -58,7 +58,7 @@ static auto to_genmc_verbosity_level(const LogLevel log_level) -> VerbosityLevel
     logLevel = to_genmc_verbosity_level(log_level);
 }
 
-/* unsafe */ auto MiriGenmcShim::create_handle(const GenmcParams& params)
+/* unsafe */ auto MiriGenmcShim::create_handle(const GenmcParams& params, bool estimation_mode)
     -> std::unique_ptr<MiriGenmcShim> {
     auto conf = std::make_shared<Config>();
 
@@ -122,9 +122,11 @@ static auto to_genmc_verbosity_level(const LogLevel log_level) -> VerbosityLevel
     // FIXME(genmc): expose this setting to Miri (useful for testing Miri-GenMC).
     conf->schedulePolicy = SchedulePolicy::WF;
 
+    // Set the maximal number of executions tested in estimation mode.
+    conf->estimationMax = params.estimation_max;
     // Set the mode used for this driver, either estimation or verification.
-    // FIXME(genmc): implement estimation mode.
-    const auto mode = GenMCDriver::Mode(GenMCDriver::VerificationMode {});
+    const auto mode = estimation_mode ? GenMCDriver::Mode(GenMCDriver::EstimationMode {})
+                                      : GenMCDriver::Mode(GenMCDriver::VerificationMode {});
 
     // Running Miri-GenMC without race detection is not supported.
     // Disabling this option also changes the behavior of the replay scheduler to only schedule
@@ -144,6 +146,7 @@ static auto to_genmc_verbosity_level(const LogLevel log_level) -> VerbosityLevel
 
     // Create the actual driver and Miri-GenMC communication shim.
     auto driver = std::make_unique<MiriGenmcShim>(std::move(conf), mode);
+    auto* driverPtr = driver.get();
 
     // FIXME(genmc,HACK): Until a proper solution is implemented in GenMC, these callbacks will
     // allow Miri to return information about global allocations and override uninitialized memory
@@ -177,7 +180,8 @@ static auto to_genmc_verbosity_level(const LogLevel log_level) -> VerbosityLevel
         // FIXME(genmc): implement proper support for uninitialized memory in GenMC. Ideally, the
         // initial value getter would return an `optional<SVal>`, since the memory location may be
         // uninitialized.
-        /* initValGetter: */ [](const AAccess& a) { return SVal(0xDEAD); },
+        /* initValGetter: */
+        [driverPtr](const AAccess& access) { return SVal(0xDEAD); },
         // Miri serves non-atomic loads from its own memory and these GenMC checks are wrong in
         // that case. This should no longer be required with proper mixed-size access support.
         /* skipUninitLoadChecks: */ [](MemOrdering ord) { return ord == MemOrdering::NotAtomic; },

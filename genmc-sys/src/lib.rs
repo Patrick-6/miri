@@ -27,6 +27,7 @@ static GENMC_LOG_LEVEL: OnceLock<LogLevel> = OnceLock::new();
 pub fn create_genmc_driver_handle(
     params: &GenmcParams,
     genmc_log_level: LogLevel,
+    do_estimation: bool,
 ) -> UniquePtr<MiriGenmcShim> {
     // SAFETY: Only setting the GenMC log level once is guaranteed by the `OnceLock`.
     // No other place calls `set_log_level_raw`, so the `logLevel` value in GenMC will not change once we initialize it once.
@@ -40,7 +41,7 @@ pub fn create_genmc_driver_handle(
         }),
         "Attempt to change the GenMC log level after it was already set"
     );
-    unsafe { MiriGenmcShim::create_handle(params) }
+    unsafe { MiriGenmcShim::create_handle(params, do_estimation) }
 }
 
 impl GenmcScalar {
@@ -285,7 +286,10 @@ mod ffi {
         /// start creating handles.
         /// There should not be any other (safe) way to create a `MiriGenmcShim`.
         #[Self = "MiriGenmcShim"]
-        unsafe fn create_handle(params: &GenmcParams) -> UniquePtr<MiriGenmcShim>;
+        unsafe fn create_handle(
+            params: &GenmcParams,
+            estimation_mode: bool,
+        ) -> UniquePtr<MiriGenmcShim>;
         /// Get the bit mask that GenMC expects for global memory allocations.
         fn get_global_alloc_static_mask() -> u64;
 

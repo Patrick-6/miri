@@ -65,7 +65,7 @@ struct MiriGenmcShim : private GenMCDriver {
     /// `logLevel`, causing a data race. The safest way to use these functions is to call
     /// `set_log_level_raw` once, and only then start creating handles. There should not be any
     /// other (safe) way to create a `MiriGenmcShim`.
-    /* unsafe */ static auto create_handle(const GenmcParams& params)
+    /* unsafe */ static auto create_handle(const GenmcParams& params, bool estimation_mode)
         -> std::unique_ptr<MiriGenmcShim>;
 
     virtual ~MiriGenmcShim() {}

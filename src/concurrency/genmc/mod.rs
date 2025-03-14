@@ -35,7 +35,7 @@ mod thread_id_map;
 pub use genmc_sys::GenmcParams;
 
 pub use self::config::GenmcConfig;
-pub use self::run::run_genmc_mode;
+pub use self::run::{GenmcMode, run_genmc_mode};
 
 #[derive(Clone, Copy, Debug)]
 pub enum ExitType {
@@ -121,10 +121,13 @@ pub struct GenmcCtx {
 /// GenMC Context creation and administrative / query actions
 impl GenmcCtx {
     /// Create a new `GenmcCtx` from a given config.
-    fn new(miri_config: &MiriConfig, global_state: Arc<GlobalState>) -> Self {
+    fn new(miri_config: &MiriConfig, global_state: Arc<GlobalState>, mode: GenmcMode) -> Self {
         let genmc_config = miri_config.genmc_config.as_ref().unwrap();
-        let handle =
-            RefCell::new(create_genmc_driver_handle(&genmc_config.params, genmc_config.log_level));
+        let handle = RefCell::new(create_genmc_driver_handle(
+            &genmc_config.params,
+            genmc_config.log_level,
+            /* do_estimation: */ mode == GenmcMode::Estimation,
+        ));
         Self { handle, exec_state: Default::default(), global_state }
     }
 

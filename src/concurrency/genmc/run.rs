@@ -1,5 +1,7 @@
+use std::fmt::Display;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use rustc_middle::ty::TyCtxt;
 
@@ -7,24 +9,41 @@ use super::GlobalState;
 use crate::rustc_const_eval::interpret::PointerArithmetic;
 use crate::{GenmcCtx, MiriConfig};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum GenmcMode {
+    Estimation,
+    Verification,
+}
+
+impl Display for GenmcMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            GenmcMode::Estimation => "Estimation",
+            GenmcMode::Verification => "Verification",
+        })
+    }
+}
+
 /// Do a complete run of the program in GenMC mode.
 /// This will call `eval_entry` multiple times, until either:
 /// - An error is detected (indicated by a `None` return value)
 /// - All possible executions are explored.
 ///
-/// FIXME(genmc): add estimation mode setting.
+/// Returns `None` is an error is detected, or `Some(return_value)` with the return value of the last run of the program.
 pub fn run_genmc_mode<'tcx>(
     config: &MiriConfig,
     eval_entry: impl Fn(Rc<GenmcCtx>) -> Option<i32>,
     tcx: TyCtxt<'tcx>,
+    mode: GenmcMode,
 ) -> Option<i32> {
+    let time_start = Instant::now();
     let genmc_config = config.genmc_config.as_ref().unwrap();
 
     // There exists only one `global_state` per full run in GenMC mode.
     // It is shared by all `GenmcCtx` in this run.
     // FIXME(genmc): implement multithreading once GenMC supports it.
     let global_state = Arc::new(GlobalState::new(tcx.target_usize_max()));
-    let genmc_ctx = Rc::new(GenmcCtx::new(config, global_state));
+    let genmc_ctx = Rc::new(GenmcCtx::new(config, global_state, mode));
 
     // `rep` is used to report the progress, Miri will panic on wrap-around.
     for rep in 0u64.. {
@@ -63,7 +82,13 @@ pub fn run_genmc_mode<'tcx>(
             continue;
         }
 
-        eprintln!("(GenMC) Verification complete. No errors were detected.");
+        eprintln!("(GenMC) {mode} complete. No errors were detected.",);
+
+        if mode == GenmcMode::Estimation && return_code == 0 {
+            let elapsed_time = Instant::now().duration_since(time_start);
+            genmc_ctx.print_estimation_result(elapsed_time);
+            return Some(0);
+        }
 
         let explored_execution_count = genmc_ctx.get_explored_execution_count();
         let blocked_execution_count = genmc_ctx.get_blocked_execution_count();
