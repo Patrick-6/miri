@@ -219,6 +219,7 @@ fn compile_cpp_dependencies(genmc_path: &Path) {
     let cpp_files = [
         "./cpp/src/MiriInterface/EventHandling.cpp",
         "./cpp/src/MiriInterface/Exploration.cpp",
+        "./cpp/src/MiriInterface/MixedSize.cpp",
         "./cpp/src/MiriInterface/Setup.cpp",
         "./cpp/src/MiriInterface/ThreadManagement.cpp",
     ];

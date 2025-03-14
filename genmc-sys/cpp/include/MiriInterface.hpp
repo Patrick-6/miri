@@ -208,15 +208,24 @@ struct MiriGenmcShim : private GenMCDriver {
         return --threads_action_[tid].event;
     }
 
+    // FIXME(genmc): remove once proper mixed atomic-non-atomic access support is implemented
+    /** Try to insert the initial value of a memory location. */
+    void handle_old_val(const SAddr addr, GenmcScalar value);
+
     /**
      * Helper function for loads that need to reset the event counter when no value is returned.
      * Same syntax as `GenMCDriver::handleLoad`, but this takes a thread id instead of an Event.
      * Automatically calls `inc_pos` and `dec_pos` where needed for the given thread.
      */
     template <EventLabel::EventLabelKind k, typename... Ts>
-    auto handle_load_reset_if_none(ThreadId tid, Ts&&... params) -> HandleResult<SVal> {
+    auto handle_load_reset_if_none(
+        std::function<void(SAddr)> old_val_setter,
+        ThreadId tid,
+        Ts&&... params
+    ) -> HandleResult<SVal> {
         const auto pos = inc_pos(tid);
-        const auto ret = GenMCDriver::handleLoad<k>(pos, std::forward<Ts>(params)...);
+        const auto ret =
+            GenMCDriver::handleLoad<k>(old_val_setter, pos, std::forward<Ts>(params)...);
         // If we didn't get a value, we reset the index of the current thread.
         if (!std::holds_alternative<SVal>(ret)) {
             dec_pos(tid);
@@ -268,6 +277,7 @@ namespace GenmcScalarExt {
 inline GenmcScalar uninit() {
     return GenmcScalar {
         /* value: */ 0,
+        /* extra: */ 0,
         /* is_init: */ false,
     };
 }
@@ -275,13 +285,14 @@ inline GenmcScalar uninit() {
 inline GenmcScalar from_sval(SVal sval) {
     return GenmcScalar {
         /* value: */ sval.get(),
+        /* extra:  */ sval.getExtra(),
         /* is_init: */ true,
     };
 }
 
 inline SVal to_sval(GenmcScalar scalar) {
     ERROR_ON(!scalar.is_init, "Cannot convert an uninitialized `GenmcScalar` into an `SVal`\n");
-    return SVal(scalar.value);
+    return SVal(scalar.value, scalar.extra);
 }
 } // namespace GenmcScalarExt
 

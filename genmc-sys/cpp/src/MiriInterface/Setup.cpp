@@ -62,6 +62,8 @@ static auto to_genmc_verbosity_level(const LogLevel log_level) -> VerbosityLevel
     -> std::unique_ptr<MiriGenmcShim> {
     auto conf = std::make_shared<Config>();
 
+    conf->skipNonAtomicInitializedCheck = true;
+
     // Set whether GenMC should print execution graphs after every explored/blocked execution.
     conf->printExecGraphs =
         (params.print_execution_graphs == ExecutiongraphPrinting::Explored ||
@@ -181,7 +183,28 @@ static auto to_genmc_verbosity_level(const LogLevel log_level) -> VerbosityLevel
         // initial value getter would return an `optional<SVal>`, since the memory location may be
         // uninitialized.
         /* initValGetter: */
-        [driverPtr](const AAccess& access) { return SVal(0xDEAD); },
+        [driverPtr](const AAccess& access) {
+            const auto addr = access.getAddr();
+            if (!driverPtr->init_vals_.contains(addr)) {
+                LOG(VerbosityLevel::Warning)
+                    << "WARNING: TODO GENMC: requested initial value for address " << addr
+                    << ", but there is none.\n";
+                return SVal(0xCC00CC00);
+                // BUG_ON(!driverPtr->init_vals_.contains(addr));
+            }
+            auto result = driverPtr->init_vals_[addr];
+            if (!result.is_init) {
+                LOG(VerbosityLevel::Warning)
+                    << "WARNING: TODO GENMC: requested initial value for address " << addr
+                    << ", but the memory is uninitialized.\n";
+                return SVal(0xFF00FF00);
+            }
+            LOG(VerbosityLevel::Warning)
+                << "MiriGenmcShim: requested initial value for address " << addr
+                << " == " << addr.get() << ", returning: " << result.is_init << ", " << result.value
+                << ", " << result.extra << "\n";
+            return GenmcScalarExt::to_sval(result);
+        },
         // Miri serves non-atomic loads from its own memory and these GenMC checks are wrong in
         // that case. This should no longer be required with proper mixed-size access support.
         /* skipUninitLoadChecks: */ [](MemOrdering ord) { return ord == MemOrdering::NotAtomic; },
