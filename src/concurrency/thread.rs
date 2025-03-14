@@ -17,6 +17,7 @@ use rustc_middle::ty::layout::TyAndLayout;
 use rustc_span::Span;
 
 use crate::concurrency::GlobalDataRaceHandler;
+use crate::concurrency::genmc::scheduling::EvalContextExt as _;
 use crate::shims::tls;
 use crate::*;
 
@@ -725,8 +726,8 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         let this = self.eval_context_mut();
 
         // In GenMC mode, we let GenMC do the scheduling.
-        if let Some(genmc_ctx) = this.machine.data_race.as_genmc_ref() {
-            let next_thread_id = genmc_ctx.schedule_thread(this)?;
+        if this.machine.data_race.as_genmc_ref().is_some() {
+            let next_thread_id = this.genmc_schedule_thread()?;
 
             let thread_manager = &mut this.machine.threads;
             thread_manager.active_thread = next_thread_id;

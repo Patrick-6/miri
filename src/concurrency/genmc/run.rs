@@ -15,6 +15,13 @@ pub enum GenmcMode {
     Verification,
 }
 
+impl GenmcMode {
+    /// Return whether warnings on unsupported features should be printed in this mode.
+    fn print_unsupported_warnings(self) -> bool {
+        self == GenmcMode::Verification
+    }
+}
+
 impl Display for GenmcMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
@@ -42,7 +49,8 @@ pub fn run_genmc_mode<'tcx>(
     // There exists only one `global_state` per full run in GenMC mode.
     // It is shared by all `GenmcCtx` in this run.
     // FIXME(genmc): implement multithreading once GenMC supports it.
-    let global_state = Arc::new(GlobalState::new(tcx.target_usize_max()));
+    let global_state =
+        Arc::new(GlobalState::new(tcx.target_usize_max(), mode.print_unsupported_warnings()));
     let genmc_ctx = Rc::new(GenmcCtx::new(config, global_state, mode));
 
     // `rep` is used to report the progress, Miri will panic on wrap-around.

@@ -20,7 +20,7 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
 }
 
 fn main_() {
-    // let _ids = unsafe { create_pthreads_no_params( [thread_1, thread_2]) };
+    // let _ids = unsafe { spawn_pthreads_no_params( [thread_1, thread_2]) };
     // unsafe { join_pthreads(ids) };
 
     let handle1 = std::thread::spawn(|| {

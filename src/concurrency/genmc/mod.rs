@@ -14,10 +14,12 @@ use tracing::{debug, info};
 
 use self::global_allocations::{EvalContextExt as _, GlobalAllocationHandler};
 use self::helper::{
-    MAX_ACCESS_SIZE, genmc_scalar_to_scalar, scalar_to_genmc_scalar, to_genmc_rmw_op,
+    MAX_ACCESS_SIZE, genmc_scalar_to_scalar, maybe_upgrade_compare_exchange_success_orderings,
+    scalar_to_genmc_scalar, to_genmc_rmw_op,
 };
 use self::thread_id_map::ThreadIdMap;
 use crate::concurrency::genmc::helper::split_access;
+use crate::concurrency::genmc::warnings::WarningsCache;
 use crate::intrinsics::AtomicRmwOp;
 use crate::{
     AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, MemoryKind, MiriConfig,
@@ -31,6 +33,7 @@ mod helper;
 mod run;
 pub(crate) mod scheduling;
 mod thread_id_map;
+mod warnings;
 
 pub use genmc_sys::GenmcParams;
 
@@ -86,11 +89,18 @@ struct GlobalState {
     /// Keep track of global allocations, to ensure they keep the same address across different executions, even if the order of allocations changes.
     /// The `AllocId` for globals is stable across executions, so we can use it as an identifier.
     global_allocations: GlobalAllocationHandler,
+
+    /// Cache for which warnings have already been shown to the user.
+    /// `None` if warnings are disabled.
+    warnings_cache: Option<WarningsCache>,
 }
 
 impl GlobalState {
-    fn new(target_usize_max: u64) -> Self {
-        Self { global_allocations: GlobalAllocationHandler::new(target_usize_max) }
+    fn new(target_usize_max: u64, print_warnings: bool) -> Self {
+        Self {
+            global_allocations: GlobalAllocationHandler::new(target_usize_max),
+            warnings_cache: print_warnings.then(|| Default::default()),
+        }
     }
 }
 
@@ -358,21 +368,79 @@ impl GenmcCtx {
     /// `old_value` is the value that a non-atomic load would read here, or `None` if the memory is uninitalized.
     pub(crate) fn atomic_compare_exchange<'tcx>(
         &self,
-        _ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
-        _address: Size,
-        _size: Size,
-        _expected_old_value: Scalar,
-        _new_value: Scalar,
-        _success: AtomicRwOrd,
-        _fail: AtomicReadOrd,
-        _can_fail_spuriously: bool,
-        _old_value: Scalar,
+        ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
+        address: Size,
+        size: Size,
+        expected_old_value: Scalar,
+        new_value: Scalar,
+        success: AtomicRwOrd,
+        fail: AtomicReadOrd,
+        can_fail_spuriously: bool,
+        old_value: Scalar,
     ) -> InterpResult<'tcx, (Scalar, Option<Scalar>, bool)> {
         assert!(
             !self.get_alloc_data_races(),
             "atomic compare-exchange with data race checking disabled."
         );
-        throw_unsup_format!("FIXME(genmc): Add support for atomic compare_exchange.")
+
+        // Upgrade the success memory ordering to equal the failure ordering, since GenMC currently ignores the failure ordering.
+        // FIXME(genmc): remove this once GenMC properly supports the failure memory ordering.
+        let upgraded_success_ordering =
+            maybe_upgrade_compare_exchange_success_orderings(success, fail);
+
+        if let Some(warnings_cache) = &self.global_state.warnings_cache {
+            // FIXME(genmc): remove once GenMC supports failure memory ordering in `compare_exchange`.
+            warnings_cache.warn_once_rmw_failure_ordering(
+                ecx,
+                success,
+                upgraded_success_ordering,
+                fail,
+            );
+            // FIXME(genmc): remove once GenMC implements spurious failures for `compare_exchange_weak`.
+            if can_fail_spuriously {
+                warnings_cache.warn_once_compare_exchange_weak(ecx);
+            }
+        }
+
+        debug!(
+            "GenMC: atomic_compare_exchange, address: {address:?}, size: {size:?} (expect: {expected_old_value:?}, new: {new_value:?}, old_value: {old_value:?}, {success:?}, orderings: {fail:?}), can fail spuriously: {can_fail_spuriously}"
+        );
+
+        let thread_infos = self.exec_state.thread_id_manager.borrow();
+        let curr_thread = ecx.machine.threads.active_thread();
+        let genmc_tid = thread_infos.get_genmc_tid(curr_thread);
+
+        let genmc_expected_value = scalar_to_genmc_scalar(ecx, expected_old_value)?;
+        let genmc_new_value = scalar_to_genmc_scalar(ecx, new_value)?;
+        let genmc_old_value = scalar_to_genmc_scalar(ecx, old_value)?;
+
+        let cas_result = self.handle.borrow_mut().pin_mut().handle_compare_exchange(
+            genmc_tid,
+            address.bytes(),
+            size.bytes(),
+            genmc_expected_value,
+            genmc_new_value,
+            genmc_old_value,
+            upgraded_success_ordering.to_genmc(),
+            fail.to_genmc(),
+            can_fail_spuriously,
+        );
+
+        if let Some(error) = cas_result.error.as_ref() {
+            throw_ub_format!("{}", error.to_string_lossy()); // TODO GENMC: proper error handling: find correct error here
+        }
+
+        let return_scalar = genmc_scalar_to_scalar(ecx, cas_result.old_value, size)?;
+        debug!(
+            "GenMC: atomic_compare_exchange: result: {cas_result:?}, returning scalar: {return_scalar:?}"
+        );
+        // The write can only be a co-maximal write if the CAS succeeded.
+        assert!(cas_result.is_success || !cas_result.is_coherence_order_maximal_write);
+        interp_ok((
+            return_scalar,
+            cas_result.is_coherence_order_maximal_write.then_some(new_value),
+            cas_result.is_success,
+        ))
     }
 
     /// Inform GenMC about a non-atomic memory load

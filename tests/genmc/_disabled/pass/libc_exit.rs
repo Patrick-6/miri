@@ -36,7 +36,7 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
         unimplemented!();
     };
 
-    let _ids = unsafe { create_pthreads_no_params(thread_order) };
+    let _ids = unsafe { spawn_pthreads_no_params(thread_order) };
 
     0
 }

@@ -34,6 +34,7 @@ struct SchedulingResult;
 struct LoadResult;
 struct StoreResult;
 struct ReadModifyWriteResult;
+struct CompareExchangeResult;
 
 // GenMC uses `int` for its thread IDs.
 using ThreadId = int;
@@ -99,6 +100,17 @@ struct MiriGenmcShim : private GenMCDriver {
         MemOrdering ordering,
         GenmcScalar rhs_value,
         GenmcScalar old_val
+    );
+    [[nodiscard]] CompareExchangeResult handle_compare_exchange(
+        ThreadId thread_id,
+        uint64_t address,
+        uint64_t size,
+        GenmcScalar expected_value,
+        GenmcScalar new_value,
+        GenmcScalar old_val,
+        MemOrdering success_ordering,
+        MemOrdering fail_load_ordering,
+        bool can_fail_spuriously
     );
     [[nodiscard]] StoreResult handle_store(
         ThreadId thread_id,
@@ -346,5 +358,28 @@ inline ReadModifyWriteResult from_error(std::unique_ptr<std::string> error) {
                                    /* is_coherence_order_maximal_write: */ false };
 }
 } // namespace ReadModifyWriteResultExt
+
+namespace CompareExchangeResultExt {
+inline CompareExchangeResult success(SVal old_value, bool is_coherence_order_maximal_write) {
+    return CompareExchangeResult { /* error: */ nullptr,
+                                   /* old_value: */ GenmcScalarExt::from_sval(old_value),
+                                   /* is_success: */ true,
+                                   is_coherence_order_maximal_write };
+}
+
+inline CompareExchangeResult failure(SVal old_value) {
+    return CompareExchangeResult { /* error: */ nullptr,
+                                   /* old_value: */ GenmcScalarExt::from_sval(old_value),
+                                   /* is_success: */ false,
+                                   /* is_coherence_order_maximal_write: */ false };
+}
+
+inline CompareExchangeResult from_error(std::unique_ptr<std::string> error) {
+    return CompareExchangeResult { std::move(error),
+                                   /* old_value: */ GenmcScalarExt::uninit(),
+                                   /* is_success: */ false,
+                                   /* is_coherence_order_maximal_write: */ false };
+}
+} // namespace CompareExchangeResultExt
 
 #endif /* GENMC_MIRI_INTERFACE_HPP */
