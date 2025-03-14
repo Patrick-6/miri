@@ -9,6 +9,7 @@ use std::cmp::max;
 use rand::Rng;
 use rustc_abi::{Align, Size};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use tracing::debug;
 
 use self::reuse_pool::ReusePool;
 use crate::concurrency::VClock;
@@ -114,8 +115,15 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
         memory_kind: MemoryKind,
     ) -> InterpResult<'tcx, u64> {
         let this = self.eval_context_ref();
-        let mut rng = this.machine.rng.borrow_mut();
         let info = this.get_alloc_info(alloc_id);
+
+        if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
+            let addr = genmc_ctx.handle_alloc(&this.machine, info.size, info.align).unwrap(); // TODO GENMC: proper error handling
+            debug!("addr_from_alloc_id_uncached: {alloc_id:?} --> {addr}");
+            return interp_ok(addr);
+        }
+
+        let mut rng = this.machine.rng.borrow_mut();
         // This is either called immediately after allocation (and then cached), or when
         // adjusting `tcx` pointers (which never get freed). So assert that we are looking
         // at a live allocation. This also ensures that we never re-assign an address to an
@@ -490,7 +498,7 @@ impl<'tcx> MiriMachine<'tcx> {
         // Also remember this address for future reuse.
         let thread = self.threads.active_thread();
         global_state.reuse.add_addr(rng, addr, size, align, kind, thread, || {
-            if let Some(data_race) = &self.data_race {
+            if let Some(data_race) = &self.concurrency_handler.as_data_race_ref() {
                 data_race.release_clock(&self.threads, |clock| clock.clone())
             } else {
                 VClock::default()

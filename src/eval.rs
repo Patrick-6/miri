@@ -3,6 +3,7 @@
 use std::ffi::{OsStr, OsString};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::task::Poll;
 use std::{iter, thread};
 
@@ -16,6 +17,7 @@ use rustc_session::config::EntryFnType;
 
 use crate::concurrency::thread::TlsAllocAction;
 use crate::diagnostics::report_leaks;
+use crate::genmc::{GenmcConfig, GenmcCtx};
 use crate::shims::tls;
 use crate::*;
 
@@ -163,6 +165,8 @@ pub struct MiriConfig {
     pub address_reuse_rate: f64,
     /// Probability for address reuse across threads.
     pub address_reuse_cross_thread_rate: f64,
+    /// Settings for using GenMC with Miri (if enabled). Default: None
+    pub genmc_config: Option<GenmcConfig>,
 }
 
 impl Default for MiriConfig {
@@ -200,6 +204,7 @@ impl Default for MiriConfig {
             collect_leak_backtraces: true,
             address_reuse_rate: 0.5,
             address_reuse_cross_thread_rate: 0.1,
+            genmc_config: None,
         }
     }
 }
@@ -280,11 +285,16 @@ pub fn create_ecx<'tcx>(
     entry_id: DefId,
     entry_type: MiriEntryFnType,
     config: &MiriConfig,
+    genmc_ctx: Option<Rc<GenmcCtx>>,
 ) -> InterpResult<'tcx, InterpCx<'tcx, MiriMachine<'tcx>>> {
     let typing_env = ty::TypingEnv::fully_monomorphized();
     let layout_cx = LayoutCx::new(tcx, typing_env);
-    let mut ecx =
-        InterpCx::new(tcx, rustc_span::DUMMY_SP, typing_env, MiriMachine::new(config, layout_cx));
+    let mut ecx = InterpCx::new(
+        tcx,
+        rustc_span::DUMMY_SP,
+        typing_env,
+        MiriMachine::new(config, layout_cx, genmc_ctx),
+    );
 
     // Some parts of initialization require a full `InterpCx`.
     MiriMachine::late_init(&mut ecx, config, {
@@ -438,12 +448,17 @@ pub fn eval_entry<'tcx>(
     tcx: TyCtxt<'tcx>,
     entry_id: DefId,
     entry_type: MiriEntryFnType,
-    config: MiriConfig,
+    config: &MiriConfig,
+    genmc_ctx: Option<Rc<GenmcCtx>>,
 ) -> Option<i32> {
     // Copy setting before we move `config`.
     let ignore_leaks = config.ignore_leaks;
 
-    let mut ecx = match create_ecx(tcx, entry_id, entry_type, &config).report_err() {
+    if let Some(genmc_ctx) = &genmc_ctx {
+        genmc_ctx.handle_execution_start();
+    }
+
+    let mut ecx = match create_ecx(tcx, entry_id, entry_type, config, genmc_ctx).report_err() {
         Ok(v) => v,
         Err(err) => {
             let (kind, backtrace) = err.into_parts();
@@ -475,6 +490,11 @@ pub fn eval_entry<'tcx>(
         // https://github.com/rust-lang/miri/issues/2508).
         ecx.allow_data_races_all_threads_done();
         EnvVars::cleanup(&mut ecx).expect("error during env var cleanup");
+    }
+
+    // TODO GENMC: is this the correct place to put this?
+    if let Some(genmc_ctx) = ecx.machine.concurrency_handler.as_genmc_ref() {
+        genmc_ctx.handle_execution_end();
     }
 
     // Possibly check for memory leaks.

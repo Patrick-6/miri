@@ -12,3 +12,7 @@ perf.data.old
 flamegraph.svg
 tests/native-lib/libtestlib.so
 .auto-*
+
+/genmc/
+
+rustc-ice*.txt

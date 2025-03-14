@@ -85,6 +85,7 @@ mod clock;
 mod concurrency;
 mod diagnostics;
 mod eval;
+mod genmc;
 mod helpers;
 mod intrinsics;
 mod machine;
@@ -141,6 +142,8 @@ pub use crate::eval::{
     AlignmentCheck, BacktraceStyle, IsolatedOp, MiriConfig, MiriEntryFnType, RejectOpWith,
     ValidationMode, create_ecx, eval_entry,
 };
+// TODO GENMC: check what and how to export here:
+pub use crate::genmc::{GenmcCtx, GenmcPrintGraphSetting};
 pub use crate::helpers::{AccessKind, EvalContextExt as _};
 pub use crate::intrinsics::EvalContextExt as _;
 pub use crate::machine::{

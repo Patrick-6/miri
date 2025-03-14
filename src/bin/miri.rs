@@ -28,13 +28,14 @@ use std::env::{self, VarError};
 use std::num::NonZero;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, Once};
 
 use miri::{
-    BacktraceStyle, BorrowTrackerMethod, MiriConfig, MiriEntryFnType, ProvenanceMode, RetagFields,
-    ValidationMode,
+    BacktraceStyle, BorrowTrackerMethod, GenmcCtx, GenmcPrintGraphSetting, MiriConfig,
+    MiriEntryFnType, ProvenanceMode, RetagFields, ValidationMode,
 };
 use rustc_abi::ExternAbi;
 use rustc_data_structures::sync;
@@ -179,6 +180,13 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
                     optimizations is usually marginal at best.");
         }
 
+        let genmc_ctx = config.genmc_config.as_ref().map(GenmcCtx::new).map(Rc::new);
+        // TODO GENMC: handle this:
+        assert!(
+            !(self.many_seeds.is_some() && config.genmc_config.is_some()),
+            "GenMC mode is incompatible with many seeds mode (currently(?))"
+        );
+
         if let Some(many_seeds) = self.many_seeds.take() {
             assert!(config.seed.is_none());
             let exit_code = sync::IntoDynSyncSend(AtomicI32::new(rustc_driver::EXIT_SUCCESS));
@@ -187,7 +195,7 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
                 let mut config = config.clone();
                 config.seed = Some((*seed).into());
                 eprintln!("Trying seed: {seed}");
-                let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, config)
+                let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, &config, None)
                     .unwrap_or(rustc_driver::EXIT_FAILURE);
                 if return_code != rustc_driver::EXIT_SUCCESS {
                     eprintln!("FAILING SEED: {seed}");
@@ -205,12 +213,58 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
                 eprintln!("{num_failed}/{total} SEEDS FAILED", total = many_seeds.seeds.count());
             }
             std::process::exit(exit_code.0.into_inner());
-        } else {
-            let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, config)
+        } else if let Some(genmc_ctx) = genmc_ctx {
+            let genmc_config = config.genmc_config.as_ref().unwrap();
+
+            // TODO GENMC: remove this (it's here to prevent infinite loops during development):
+            let max_reps = 1024;
+
+            for rep in 0..max_reps {
+                tracing::info!("MIRI: running GenMC loop {}/{max_reps}", rep + 1);
+                let return_code = miri::eval_entry(
+                    tcx,
+                    entry_def_id,
+                    entry_type,
+                    &config,
+                    Some(genmc_ctx.clone()),
+                )
                 .unwrap_or_else(|| {
                     tcx.dcx().abort_if_errors();
                     rustc_driver::EXIT_FAILURE
                 });
+
+                // TODO GENMC: is this the correct place to put this?
+
+                match (genmc_config.print_graph, rep) {
+                    (GenmcPrintGraphSetting::First, 0) | (GenmcPrintGraphSetting::All, _) =>
+                        genmc_ctx.print_genmc_graph(),
+                    _ => {}
+                }
+
+                let is_exploration_done = genmc_ctx.is_exploration_done();
+                tracing::info!(
+                    "(GenMC Mode) Execution done (return code: {return_code}), is_exploration_done: {is_exploration_done}",
+                );
+
+                if is_exploration_done {
+                    // TODO GENMC: proper message here, which info should be printed?
+                    eprintln!("(GenMC Mode) Finished after {} iterations.", rep + 1);
+
+                    // TODO GENMC: what is an appropriate return code? (since there are possibly many)
+                    std::process::exit(return_code);
+                }
+            }
+            eprintln!(
+                "(GenMC Mode) Could not explore all interleavings in {max_reps} repetitions!"
+            );
+            std::process::exit(1);
+        } else {
+            let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, &config, None)
+                .unwrap_or_else(|| {
+                    tcx.dcx().abort_if_errors();
+                    rustc_driver::EXIT_FAILURE
+                });
+
             std::process::exit(return_code);
         }
 
@@ -596,6 +650,28 @@ fn main() {
             many_seeds = Some(0..64);
         } else if arg == "-Zmiri-many-seeds-keep-going" {
             many_seeds_keep_going = true;
+        } else if arg == "-Zmiri-genmc" {
+            // TODO GENMC: add to documentation
+            // TODO GENMC: add more GenMC options
+            miri_config.genmc_config = Some(Default::default());
+            // GenMC handles data race detection and weak memory emulation, so we disable the Miri equivalents:
+            // TODO GENMC: make sure this isn't reactivated by other flags
+            miri_config.data_race_detector = false;
+            miri_config.weak_memory_emulation = false;
+        } else if let Some(param) = arg.strip_prefix("-Zmiri-genmc-print-graph=") {
+            // TODO GENMC (DOCUMENTATION)
+            if let Some(genmc_config) = &mut miri_config.genmc_config {
+                genmc_config.set_graph_printing(param);
+            } else {
+                todo!("Handle GenMC arguments in wrong order");
+            }
+        } else if arg == "-Zmiri-genmc-disable-race-detection" {
+            // TODO GENMC (DOCUMENTATION)
+            if let Some(genmc_config) = &mut miri_config.genmc_config {
+                genmc_config.params.disable_race_detection = true;
+            } else {
+                todo!("Handle GenMC arguments in wrong order");
+            }
         } else if let Some(param) = arg.strip_prefix("-Zmiri-env-forward=") {
             miri_config.forwarded_env_vars.push(param.to_owned());
         } else if let Some(param) = arg.strip_prefix("-Zmiri-env-set=") {
