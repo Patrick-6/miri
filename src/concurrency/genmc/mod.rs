@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
+use std::time::Duration;
 
 use genmc_sys::{
     GENMC_GLOBAL_ADDRESSES_MASK, GenmcScalar, MemOrdering, MiriGenmcShim, RMWBinOp, UniquePtr,
