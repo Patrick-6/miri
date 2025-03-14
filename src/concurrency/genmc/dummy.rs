@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 use rustc_abi::{Align, Size};
 use rustc_const_eval::interpret::{InterpCx, InterpResult};
 use rustc_middle::mir;
@@ -15,6 +13,8 @@ pub struct GenmcCtx {}
 #[derive(Debug, Default, Clone)]
 pub struct GenmcConfig {}
 
+// TODO GENMC: add all exposed methods here too
+
 impl GenmcCtx {
     pub fn new(_miri_config: &MiriConfig, _genmc_config: &GenmcConfig) -> Self {
         unreachable!()
@@ -25,6 +25,14 @@ impl GenmcCtx {
     }
 
     pub fn print_genmc_graph(&self) {
+        unreachable!()
+    }
+
+    pub fn is_halting(&self) -> bool {
+        unreachable!()
+    }
+
+    pub fn is_moot(&self) -> bool {
         unreachable!()
     }
 
@@ -160,6 +168,17 @@ impl GenmcCtx {
         unreachable!()
     }
 
+    pub(crate) fn init_allocation<'tcx>(
+        &self,
+        _machine: &MiriMachine<'tcx>,
+        // address: Size,
+        _size: Size,
+        _align: Align,
+        _kind: MemoryKind,
+    ) {
+        unreachable!()
+    }
+
     pub(crate) fn handle_dealloc<'tcx>(
         &self,
         _machine: &MiriMachine<'tcx>,
@@ -181,11 +200,11 @@ impl GenmcCtx {
         unreachable!()
     }
 
-    pub(crate) fn handle_thread_join<'tcx>(
+    pub(crate) fn handle_thread_join(
         &self,
         _active_thread_id: ThreadId,
         _child_thread_id: ThreadId,
-    ) -> InterpResult<'tcx, ()> {
+    ) -> Result<(), ()> {
         unreachable!()
     }
 
