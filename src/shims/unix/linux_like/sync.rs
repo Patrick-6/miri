@@ -13,6 +13,9 @@ pub fn futex<'tcx>(
     varargs: &[OpTy<'tcx>],
     dest: &MPlaceTy<'tcx>,
 ) -> InterpResult<'tcx> {
+    if ecx.machine.data_race.as_genmc_ref().is_some() {
+        throw_unsup_format!("Futexes are currently not supported in GenMC mode");
+    }
     let [addr, op, val] = check_min_vararg_count("`syscall(SYS_futex, ...)`", varargs)?;
 
     // See <https://man7.org/linux/man-pages/man2/futex.2.html> for docs.

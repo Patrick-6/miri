@@ -716,6 +716,9 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         callback: DynUnblockCallback<'tcx>,
     ) {
         let this = self.eval_context_mut();
+        if this.machine.data_race.as_genmc_ref().is_some() {
+            unimplemented!("Futexes are currently not supported in GenMC mode");
+        }
         let thread = this.active_thread();
         let mut futex = futex_ref.0.borrow_mut();
         let waiters = &mut futex.waiters;
@@ -766,8 +769,13 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         let mut futex = futex_ref.0.borrow_mut();
 
         // Each futex-wake happens-before the end of the futex wait
-        if let Some(data_race) = this.machine.data_race.as_vclocks_ref() {
-            data_race.release_clock(&this.machine.threads, |clock| futex.clock.clone_from(clock));
+        match &this.machine.data_race {
+            concurrency::GlobalDataRaceHandler::None => {}
+            concurrency::GlobalDataRaceHandler::Genmc(_genmc_ctx) =>
+                throw_unsup_format!("Futexes are currently not supported in GenMC mode"),
+            concurrency::GlobalDataRaceHandler::Vclocks(data_race) =>
+                data_race
+                    .release_clock(&this.machine.threads, |clock| futex.clock.clone_from(clock)),
         }
 
         // Remove `count` of the threads in the queue that match any of the bits in the bitset.

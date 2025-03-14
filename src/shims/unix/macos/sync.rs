@@ -91,6 +91,9 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         dest: &MPlaceTy<'tcx>,
     ) -> InterpResult<'tcx> {
         let this = self.eval_context_mut();
+        if this.machine.data_race.as_genmc_ref().is_some() {
+            throw_unsup_format!("Futexes are currently not supported in GenMC mode");
+        }
         let none = this.eval_libc_u32("OS_SYNC_WAIT_ON_ADDRESS_NONE");
         let shared = this.eval_libc_u32("OS_SYNC_WAIT_ON_ADDRESS_SHARED");
         let absolute_clock = this.eval_libc_u32("OS_CLOCK_MACH_ABSOLUTE_TIME");

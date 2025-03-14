@@ -172,6 +172,9 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         dest: &MPlaceTy<'tcx>,
     ) -> InterpResult<'tcx> {
         let this = self.eval_context_mut();
+        if this.machine.data_race.as_genmc_ref().is_some() {
+            throw_unsup_format!("Futexes are currently not supported in GenMC mode");
+        }
 
         let ptr = this.read_pointer(ptr_op)?;
         let compare = this.read_pointer(compare_op)?;
