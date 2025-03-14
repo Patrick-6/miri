@@ -45,9 +45,13 @@ void MiriGenmcShim::handle_assume_block(ThreadId thread_id) {
     MemOrdering ord,
     GenmcScalar old_val
 ) -> LoadResult {
+    const auto old_val_setter = [this, old_val](SAddr addr) {
+        this->handle_old_val(addr, old_val);
+    };
     // `type` is only used for printing.
     const auto type = AType::Unsigned;
     const auto ret = handle_load_reset_if_none<EventLabel::EventLabelKind::Read>(
+        old_val_setter,
         thread_id,
         ord,
         SAddr(address),
@@ -71,8 +75,13 @@ void MiriGenmcShim::handle_assume_block(ThreadId thread_id) {
     GenmcScalar old_val,
     MemOrdering ord
 ) -> StoreResult {
+    auto old_val_setter = [this, old_val](SAddr addr) {
+        // TODO GENMC(HACK): is this the correct way to do it?
+        this->handle_old_val(addr, old_val);
+    };
     const auto pos = inc_pos(thread_id);
     const auto ret = GenMCDriver::handleStore<EventLabel::EventLabelKind::Write>(
+        old_val_setter,
         pos,
         ord,
         SAddr(address),
@@ -113,9 +122,14 @@ void MiriGenmcShim::handle_fence(ThreadId thread_id, MemOrdering ord) {
     // into a load and a store component. This means we can have for example `AcqRel` loads and
     // stores, but this is intended for RMW operations.
 
+    const auto old_val_setter = [this, old_val](SAddr addr) {
+        this->handle_old_val(addr, old_val);
+    };
+
     // Somewhat confusingly, the GenMC term for RMW read/write labels is
     // `FaiRead` and `FaiWrite`.
     const auto load_ret = handle_load_reset_if_none<EventLabel::EventLabelKind::FaiRead>(
+        old_val_setter,
         thread_id,
         ordering,
         SAddr(address),
@@ -138,6 +152,7 @@ void MiriGenmcShim::handle_fence(ThreadId thread_id, MemOrdering ord) {
 
     const auto storePos = inc_pos(thread_id);
     const auto store_ret = GenMCDriver::handleStore<EventLabel::EventLabelKind::FaiWrite>(
+        old_val_setter,
         storePos,
         ordering,
         SAddr(address),
@@ -181,7 +196,9 @@ void MiriGenmcShim::handle_fence(ThreadId thread_id, MemOrdering ord) {
     auto expectedVal = GenmcScalarExt::to_sval(expected_value);
     auto new_val = GenmcScalarExt::to_sval(new_value);
 
+    auto old_val_setter = [this, old_val](SAddr addr) { this->handle_old_val(addr, old_val); };
     const auto load_ret = handle_load_reset_if_none<EventLabel::EventLabelKind::CasRead>(
+        old_val_setter,
         thread_id,
         success_ordering,
         SAddr(address),
@@ -202,6 +219,7 @@ void MiriGenmcShim::handle_fence(ThreadId thread_id, MemOrdering ord) {
 
     const auto storePos = inc_pos(thread_id);
     const auto store_ret = GenMCDriver::handleStore<EventLabel::EventLabelKind::CasWrite>(
+        old_val_setter,
         storePos,
         success_ordering,
         SAddr(address),

@@ -208,21 +208,33 @@ struct MiriGenmcShim : private GenMCDriver {
         return --threads_action_[tid].event;
     }
 
+    // FIXME(genmc): remove once proper mixed atomic-non-atomic access support is implemented
+    /** Try to insert the initial value of a memory location. */
+    void handle_old_val(const SAddr addr, GenmcScalar value);
+
     /**
      * Helper function for loads that need to reset the event counter when no value is returned.
      * Same syntax as `GenMCDriver::handleLoad`, but this takes a thread id instead of an Event.
      * Automatically calls `inc_pos` and `dec_pos` where needed for the given thread.
      */
     template <EventLabel::EventLabelKind k, typename... Ts>
-    auto handle_load_reset_if_none(ThreadId tid, Ts&&... params) -> HandleResult<SVal> {
+    auto handle_load_reset_if_none(
+        std::function<void(SAddr)> old_val_setter,
+        ThreadId tid,
+        Ts&&... params
+    ) -> HandleResult<SVal> {
         const auto pos = inc_pos(tid);
-        const auto ret = GenMCDriver::handleLoad<k>(pos, std::forward<Ts>(params)...);
+        const auto ret =
+            GenMCDriver::handleLoad<k>(old_val_setter, pos, std::forward<Ts>(params)...);
         // If we didn't get a value, we have to reset the index of the current thread.
         if (!std::holds_alternative<SVal>(ret)) {
             dec_pos(tid);
         }
         return ret;
     }
+
+    // TODO GENMC(mixed-size accesses):
+    std::unordered_map<SAddr, GenmcScalar> init_vals_ {};
 
     /**
      * GenMC uses the term `Action` to refer to a struct of:

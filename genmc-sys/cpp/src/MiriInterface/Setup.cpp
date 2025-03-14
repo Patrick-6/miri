@@ -153,6 +153,7 @@ static auto to_genmc_verbosity_level(const LogLevel log_level) -> VerbosityLevel
 
     // Create the actual driver and Miri-GenMC communication shim.
     auto driver = std::make_unique<MiriGenmcShim>(std::move(conf), mode);
+    auto* driverPtr = driver.get();
 
     // FIXME(genmc,HACK): Until a proper solution is implemented in GenMC, these callbacks will
     // allow Miri to return information about global allocations and override uninitialized memory
@@ -185,7 +186,29 @@ static auto to_genmc_verbosity_level(const LogLevel log_level) -> VerbosityLevel
         // FIXME(genmc): implement proper support for uninitialized memory in GenMC.
         // Ideally, the initial value getter would return an `optional<SVal>`, since the memory
         // location may be uninitialized.
-        .initValGetter = [](const AAccess& a) { return SVal(0xDEAD); },
+        .initValGetter =
+            [driverPtr](const AAccess& access) {
+                const auto addr = access.getAddr();
+                if (!driverPtr->init_vals_.contains(addr)) {
+                    LOG(VerbosityLevel::Tip) << "WARNING: TODO GENMC: requested initial value "
+                                                "for address "
+                                             << addr << ", but there is none.\n";
+                    return SVal(0xCC00CC00);
+                    // BUG_ON(!driverPtr->init_vals_.contains(addr));
+                }
+                auto result = driverPtr->init_vals_[addr];
+                if (!result.is_init) {
+                    LOG(VerbosityLevel::Tip) << "WARNING: TODO GENMC: requested initial value "
+                                                "for address "
+                                             << addr << ", but the memory is uninitialized.\n";
+                    return SVal(0xFF00FF00);
+                }
+                LOG(VerbosityLevel::Tip)
+                    << "MiriGenmcShim: requested initial value for address " << addr
+                    << " == " << addr.get() << ", returning: " << result.is_init << ", "
+                    << result.value << ", " << result.extra << "\n";
+                return GenmcScalarExt::to_sval(result);
+            },
         // Miri serves non-atomic loads from its own memory and these GenMC checks are wrong in that
         // case. This should no longer be required with proper mixed-size access support.
         .skipUninitLoadChecks = [](const MemAccessLabel* access_label
