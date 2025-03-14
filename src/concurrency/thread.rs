@@ -113,7 +113,8 @@ pub enum BlockReason {
 }
 
 /// The state of a thread.
-enum ThreadState<'tcx> {
+// TODO GENMC: is this ok to be pub?
+pub enum ThreadState<'tcx> {
     /// The thread is enabled and can be executed.
     Enabled,
     /// The thread is blocked on something.
@@ -135,15 +136,16 @@ impl<'tcx> std::fmt::Debug for ThreadState<'tcx> {
 }
 
 impl<'tcx> ThreadState<'tcx> {
-    fn is_enabled(&self) -> bool {
+    // TODO GENMC: is it ok if these are pub?
+    pub fn is_enabled(&self) -> bool {
         matches!(self, ThreadState::Enabled)
     }
 
-    fn is_terminated(&self) -> bool {
+    pub fn is_terminated(&self) -> bool {
         matches!(self, ThreadState::Terminated)
     }
 
-    fn is_blocked_on(&self, reason: BlockReason) -> bool {
+    pub fn is_blocked_on(&self, reason: BlockReason) -> bool {
         matches!(*self, ThreadState::Blocked { reason: actual_reason, .. } if actual_reason == reason)
     }
 }
@@ -207,6 +209,11 @@ impl<'tcx> Thread<'tcx> {
     /// Get the name of the current thread if it was set.
     fn thread_name(&self) -> Option<&[u8]> {
         self.thread_name.as_deref()
+    }
+
+    pub fn get_state(&self) -> &ThreadState<'tcx> {
+        // TODO GENMC: should this implementation detail be exposed?
+        &self.state
     }
 
     /// Get the name of the current thread for display purposes; will include thread ID if not set.
@@ -340,8 +347,9 @@ impl VisitProvenance for Frame<'_, Provenance, FrameExtra<'_>> {
 }
 
 /// The moment in time when a blocked thread should be woken up.
+// TODO GENMC: is this ok to be pub?
 #[derive(Debug)]
-enum Timeout {
+pub enum Timeout {
     Monotonic(Instant),
     RealTime(SystemTime),
 }
@@ -488,6 +496,11 @@ impl<'tcx> ThreadManager<'tcx> {
         &mut self.threads[self.active_thread].stack
     }
 
+    /// TODO GENMC: this function can probably be removed once the GenmcCtx code is finished:
+    pub fn get_thread_stack(&self, id: ThreadId) -> &[Frame<'tcx, Provenance, FrameExtra<'tcx>>] {
+        &self.threads[id].stack
+    }
+
     pub fn all_stacks(
         &self,
     ) -> impl Iterator<Item = (ThreadId, &[Frame<'tcx, Provenance, FrameExtra<'tcx>>])> {
@@ -517,9 +530,19 @@ impl<'tcx> ThreadManager<'tcx> {
         self.active_thread
     }
 
+    pub fn threads_ref(&self) -> &IndexVec<ThreadId, Thread<'tcx>> {
+        // TODO GENMC: should this implementation detail be exposed?
+        &self.threads
+    }
+
     /// Get the total number of threads that were ever spawn by this program.
     pub fn get_total_thread_count(&self) -> usize {
         self.threads.len()
+    }
+
+    /// Get the total of threads that are currently enabled, i.e., could continue executing.
+    pub fn get_enabled_thread_count(&self) -> usize {
+        self.threads.iter().filter(|t| t.state.is_enabled()).count()
     }
 
     /// Get the total of threads that are currently live, i.e., not yet terminated.
@@ -564,6 +587,8 @@ impl<'tcx> ThreadManager<'tcx> {
     /// > The handle is valid until closed, even after the thread it represents has been terminated.
     fn detach_thread(&mut self, id: ThreadId, allow_terminated_joined: bool) -> InterpResult<'tcx> {
         trace!("detaching {:?}", id);
+
+        tracing::info!("GenMC: TODO GENMC: does GenMC need special handling for detached threads?");
 
         let is_ub = if allow_terminated_joined && self.threads[id].state.is_terminated() {
             // "Detached" in particular means "not yet joined". Redundant detaching is still UB.
@@ -1196,7 +1221,13 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         use rand::Rng as _;
 
         let this = self.eval_context_mut();
-        if !this.machine.threads.fixed_scheduling
+
+        // TODO GENMC: ask GenMC which thread should be executed next (maybe always preempt here and then ask if it should be re-scheduled)
+        if let Some(genmc_ctx) = this.machine.data_race.as_genmc_ref()
+            && genmc_ctx.should_preempt()
+        {
+            this.yield_active_thread();
+        } else if !this.machine.threads.fixed_scheduling
             && this.machine.rng.get_mut().random_bool(this.machine.preemption_rate)
         {
             this.yield_active_thread();
@@ -1226,6 +1257,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 SchedulingAction::ExecuteTimeoutCallback => {
                     this.run_timeout_callback()?;
                 }
+                // TODO GENMC: do we need to sleep in GenMC Mode?
                 SchedulingAction::Sleep(duration) => {
                     this.machine.monotonic_clock.sleep(duration);
                 }

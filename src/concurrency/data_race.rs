@@ -819,13 +819,16 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         // Inform GenMC about the atomic atomic exchange.
         if let Some(genmc_ctx) = this.machine.data_race.as_genmc_ref() {
             // FIXME(GenMC): Inform GenMC what a non-atomic read here would return, to support mixed atomics/non-atomics
-            let (old_val, _is_success) = genmc_ctx.atomic_exchange(
+            let (old_val, new_val) = genmc_ctx.atomic_exchange(
                 this,
                 place.ptr().addr(),
                 place.layout.size,
                 new,
                 atomic,
             )?;
+            info!("GenMC: TODO GENMC: check if new_val: {new_val:?} needs to be written somewhere");
+            // FIXME(GenMC): do we have to write `new_val` somewhere, e.g., like this?
+            // this.allow_data_races_mut(|this| this.write_scalar(new_val, place))?;
             return interp_ok(old_val);
         }
 
@@ -998,6 +1001,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         if let Some(data_race) = this.machine.data_race.as_vclocks_ref() {
             data_race.acquire_clock(clock, &this.machine.threads);
         }
+        // TODO GENMC: does GenMC need to be informed about this?
     }
 }
 
