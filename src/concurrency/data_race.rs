@@ -752,13 +752,14 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         // This is also a very special exception where we just ignore an error -- if this read
         // was UB e.g. because the memory is uninitialized, we don't want to know!
         let old_val = this.run_for_validation_mut(|this| this.read_scalar(dest)).discard_err();
+        this.allow_data_races_mut(move |this| this.write_scalar(val, dest))?;
+
         // Inform GenMC about the atomic store.
         if let Some(genmc_ctx) = this.machine.data_race.as_genmc_ref() {
             // FIXME(GenMC): Inform GenMC what a non-atomic read here would return, to support mixed atomics/non-atomics
             genmc_ctx.atomic_store(this, dest.ptr().addr(), dest.layout.size, val, atomic)?;
             return interp_ok(());
         }
-        this.allow_data_races_mut(move |this| this.write_scalar(val, dest))?;
         this.validate_atomic_store(dest, atomic)?;
         this.buffered_atomic_write(val, dest, atomic, old_val)
     }
@@ -819,13 +820,16 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         // Inform GenMC about the atomic atomic exchange.
         if let Some(genmc_ctx) = this.machine.data_race.as_genmc_ref() {
             // FIXME(GenMC): Inform GenMC what a non-atomic read here would return, to support mixed atomics/non-atomics
-            let (old_val, _is_success) = genmc_ctx.atomic_exchange(
+            let (old_val, new_val) = genmc_ctx.atomic_exchange(
                 this,
                 place.ptr().addr(),
                 place.layout.size,
                 new,
                 atomic,
             )?;
+            info!("GenMC: TODO GENMC: check if new_val: {new_val:?} needs to be written somewhere");
+            // FIXME(GenMC): do we have to write `new_val` somewhere, e.g., like this?
+            // this.allow_data_races_mut(|this| this.write_scalar(new_val, place))?;
             return interp_ok(old_val);
         }
 
@@ -903,6 +907,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         let this = self.eval_context_mut();
         this.atomic_access_check(place, AtomicAccessType::Rmw)?;
 
+        // // FIXME(GenMC): this comment is wrong:
         // Failure ordering cannot be stronger than success ordering, therefore first attempt
         // to read with the failure ordering and if successful then try again with the success
         // read ordering and write in the success case.
@@ -911,6 +916,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
 
         // Inform GenMC about the atomic atomic compare exchange.
         if let Some(genmc_ctx) = this.machine.data_race.as_genmc_ref() {
+            // TODO GENMC: read old value (if available) and give it to GenMC (NOTE: can we use read_immediate? Can the load read uninitialized memory without UB?))
             let (old, cmpxchg_success) = genmc_ctx.atomic_compare_exchange(
                 this,
                 place.ptr().addr(),
@@ -998,6 +1004,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         if let Some(data_race) = this.machine.data_race.as_vclocks_ref() {
             data_race.acquire_clock(clock, &this.machine.threads);
         }
+        // TODO GENMC: does GenMC need to be informed about this?
     }
 }
 

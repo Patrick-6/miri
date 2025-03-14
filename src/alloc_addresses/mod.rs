@@ -98,7 +98,8 @@ impl GlobalStateInner {
 
 /// Shifts `addr` to make it aligned with `align` by rounding `addr` to the smallest multiple
 /// of `align` that is larger or equal to `addr`
-fn align_addr(addr: u64, align: u64) -> u64 {
+/// FIXME(GenMC): is it ok to make this public?
+pub(crate) fn align_addr(addr: u64, align: u64) -> u64 {
     match addr % align {
         0 => addr,
         rem => addr.strict_add(align) - rem,
@@ -119,7 +120,8 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
         // Miri's address assignment leaks state across thread boundaries, which is incompatible
         // with GenMC execution. So we instead let GenMC assign addresses to allocations.
         if let Some(genmc_ctx) = this.machine.data_race.as_genmc_ref() {
-            let addr = genmc_ctx.handle_alloc(&this.machine, info.size, info.align, memory_kind)?;
+            let addr =
+                genmc_ctx.handle_alloc(this, alloc_id, info.size, info.align, memory_kind)?;
             return interp_ok(addr);
         }
 

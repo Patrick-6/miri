@@ -394,6 +394,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             mutex.owner = Some(thread);
         }
         mutex.lock_count = mutex.lock_count.strict_add(1);
+        // TODO GENMC (LOCKS):
         if let Some(data_race) = this.machine.data_race.as_vclocks_ref() {
             data_race.acquire_clock(&mutex.clock, &this.machine.threads);
         }
@@ -419,6 +420,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 // The mutex is completely unlocked. Try transferring ownership
                 // to another thread.
 
+                // TODO GENMC (LOCKS):
                 if let Some(data_race) = this.machine.data_race.as_vclocks_ref() {
                     data_race.release_clock(&this.machine.threads, |clock| {
                         mutex.clock.clone_from(clock)
@@ -489,6 +491,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         assert!(!rwlock.is_write_locked(), "the lock is write locked");
         let count = rwlock.readers.entry(thread).or_insert(0);
         *count = count.strict_add(1);
+        // TODO GENMC (LOCKS):
         if let Some(data_race) = this.machine.data_race.as_vclocks_ref() {
             data_race.acquire_clock(&rwlock.clock_unlocked, &this.machine.threads);
         }
@@ -514,6 +517,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             }
             Entry::Vacant(_) => return interp_ok(false), // we did not even own this lock
         }
+        // TODO GENMC (LOCKS):
         if let Some(data_race) = this.machine.data_race.as_vclocks_ref() {
             // Add this to the shared-release clock of all concurrent readers.
             data_race.release_clock(&this.machine.threads, |clock| {
@@ -581,6 +585,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         let mut rwlock = rwlock_ref.0.borrow_mut();
         assert!(!rwlock.is_locked(), "the rwlock is already locked");
         rwlock.writer = Some(thread);
+        // TODO GENMC (LOCKS):
         if let Some(data_race) = this.machine.data_race.as_vclocks_ref() {
             data_race.acquire_clock(&rwlock.clock_unlocked, &this.machine.threads);
         }
@@ -601,6 +606,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             rwlock.writer = None;
             trace!("rwlock_writer_unlock: unlocked by {:?}", thread);
             // Record release clock for next lock holder.
+            // TODO GENMC (LOCKS):
             if let Some(data_race) = this.machine.data_race.as_vclocks_ref() {
                 data_race.release_clock(&this.machine.threads, |clock| {
                     rwlock.clock_unlocked.clone_from(clock)
@@ -712,6 +718,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                     match unblock {
                         UnblockKind::Ready => {
                             // The condvar was signaled. Make sure we get the clock for that.
+                            // TODO GENMC (LOCKS):
                             if let Some(data_race) = this.machine.data_race.as_vclocks_ref() {
                                 data_race.acquire_clock(
                                     &this.machine.sync.condvars[condvar].clock,
@@ -744,6 +751,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         let condvar = &mut this.machine.sync.condvars[id];
 
         // Each condvar signal happens-before the end of the condvar wake
+        // TODO GENMC (LOCKS):
         if let Some(data_race) = this.machine.data_race.as_vclocks_ref() {
             data_race.release_clock(&this.machine.threads, |clock| condvar.clock.clone_from(clock));
         }
@@ -784,6 +792,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                         UnblockKind::Ready => {
                             let futex = futex_ref.0.borrow();
                             // Acquire the clock of the futex.
+                            // TODO GENMC (LOCKS):
                             if let Some(data_race) = this.machine.data_race.as_vclocks_ref() {
                                 data_race.acquire_clock(&futex.clock, &this.machine.threads);
                             }
@@ -814,6 +823,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         let mut futex = futex_ref.0.borrow_mut();
 
         // Each futex-wake happens-before the end of the futex wait
+        // TODO GENMC (LOCKS):
         if let Some(data_race) = this.machine.data_race.as_vclocks_ref() {
             data_race.release_clock(&this.machine.threads, |clock| futex.clock.clone_from(clock));
         }

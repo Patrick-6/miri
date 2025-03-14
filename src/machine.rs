@@ -1299,6 +1299,10 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         size: Size,
         align: Align,
     ) -> InterpResult<'tcx, Self::AllocExtra> {
+        info!(
+            "GenMC: TODO GENMC: init_local_allocation: id: {id:?}, kind: {kind:?}, size: {size:?}, align: {align:?}"
+        );
+
         assert!(kind != MiriMemoryKind::Global.into());
         MiriMachine::init_allocation(ecx, id, kind, size, align)
     }
@@ -1390,6 +1394,10 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         alloc: &'b Allocation,
     ) -> InterpResult<'tcx, Cow<'b, Allocation<Self::Provenance, Self::AllocExtra, Self::Bytes>>>
     {
+        info!(
+            "GenMC: adjust_global_allocation (TODO GENMC): id: {id:?} ==> Maybe tell GenMC about initial value here?"
+        );
+
         let alloc = alloc.adjust_from_tcx(
             &ecx.tcx,
             |bytes, align| ecx.get_global_alloc_bytes(id, bytes, align),
@@ -1488,7 +1496,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         match &machine.data_race {
             GlobalDataRaceHandler::None => {}
             GlobalDataRaceHandler::Genmc(genmc_ctx) =>
-                genmc_ctx.handle_dealloc(machine, ptr.addr(), size, align, kind)?,
+                genmc_ctx.handle_dealloc(machine, alloc_id, ptr.addr(), size, align, kind)?,
             GlobalDataRaceHandler::Vclocks(_global_state) => {
                 let data_race = alloc_extra.data_race.as_vclocks_mut().unwrap();
                 data_race.write(
@@ -1579,6 +1587,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
 
         let borrow_tracker = ecx.machine.borrow_tracker.as_ref();
 
+        // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
         let extra = FrameExtra {
             borrow_tracker: borrow_tracker.map(|bt| bt.borrow_mut().new_frame()),
             catch_unwind: None,
@@ -1700,6 +1709,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         frame: &Frame<'tcx, Provenance, FrameExtra<'tcx>>,
         local: mir::Local,
     ) -> InterpResult<'tcx> {
+        // TODO GENMC: does GenMC care about local reads/writes?
         if let Some(data_race) = &frame.extra.data_race {
             data_race.local_read(local, &ecx.machine);
         }
@@ -1711,6 +1721,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         local: mir::Local,
         storage_live: bool,
     ) -> InterpResult<'tcx> {
+        // TODO GENMC: does GenMC care about local reads/writes?
         if let Some(data_race) = &ecx.frame().extra.data_race {
             data_race.local_write(local, storage_live, &ecx.machine);
         }
@@ -1740,6 +1751,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
                 machine,
             );
         }
+        // TODO GENMC: how to handle this (if at all)?
         interp_ok(())
     }
 
@@ -1758,6 +1770,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             Option<TyAndLayout<'tcx>>,
         ) -> InterpResult<'tcx, OpTy<'tcx>>,
     {
+        info!("GenMC: TODO GENMC: evaluating MIR constant: {val:?}");
         let frame = ecx.active_thread_stack().last().unwrap();
         let mut cache = ecx.machine.const_cache.borrow_mut();
         match cache.entry((val, frame.extra.salt)) {

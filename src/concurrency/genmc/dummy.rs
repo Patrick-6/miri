@@ -1,7 +1,5 @@
-#![allow(unused)]
-
 use rustc_abi::{Align, Size};
-use rustc_const_eval::interpret::{InterpCx, InterpResult};
+use rustc_const_eval::interpret::{AllocId, InterpCx, InterpResult};
 use rustc_middle::mir;
 
 use crate::{
@@ -15,6 +13,8 @@ pub struct GenmcCtx {}
 #[derive(Debug, Default, Clone)]
 pub struct GenmcConfig {}
 
+// TODO GENMC: add all exposed methods here too
+
 impl GenmcCtx {
     pub fn new(_miri_config: &MiriConfig, _genmc_config: &GenmcConfig) -> Self {
         unreachable!()
@@ -25,6 +25,14 @@ impl GenmcCtx {
     }
 
     pub fn print_genmc_graph(&self) {
+        unreachable!()
+    }
+
+    pub fn is_halting(&self) -> bool {
+        unreachable!()
+    }
+
+    pub fn is_moot(&self) -> bool {
         unreachable!()
     }
 
@@ -86,7 +94,7 @@ impl GenmcCtx {
         _address: Size,
         _size: Size,
         _ordering: AtomicRwOrd,
-        (rmw_op, not): (mir::BinOp, bool),
+        (_rmw_op, _not): (mir::BinOp, bool),
         _rhs_scalar: Scalar,
     ) -> InterpResult<'tcx, (Scalar, Scalar)> {
         unreachable!()
@@ -94,13 +102,13 @@ impl GenmcCtx {
 
     pub(crate) fn atomic_min_max_op<'tcx>(
         &self,
-        ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
-        address: Size,
-        size: Size,
-        ordering: AtomicRwOrd,
-        min: bool,
-        is_signed: bool,
-        rhs_scalar: Scalar,
+        _ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
+        _address: Size,
+        _size: Size,
+        _ordering: AtomicRwOrd,
+        _min: bool,
+        _is_signed: bool,
+        _rhs_scalar: Scalar,
     ) -> InterpResult<'tcx, (Scalar, Scalar)> {
         unreachable!()
     }
@@ -152,7 +160,8 @@ impl GenmcCtx {
 
     pub(crate) fn handle_alloc<'tcx>(
         &self,
-        _machine: &MiriMachine<'tcx>,
+        _ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
+        _alloc_id: AllocId,
         _size: Size,
         _alignment: Align,
         _memory_kind: MemoryKind,
@@ -163,6 +172,7 @@ impl GenmcCtx {
     pub(crate) fn handle_dealloc<'tcx>(
         &self,
         _machine: &MiriMachine<'tcx>,
+        _alloc_id: AllocId,
         _address: Size,
         _size: Size,
         _align: Align,
@@ -202,6 +212,10 @@ impl GenmcCtx {
 
     /**** Scheduling functionality ****/
 
+    pub(crate) fn should_preempt(&self) -> bool {
+        unreachable!()
+    }
+
     pub(crate) fn schedule_thread<'tcx>(
         &self,
         _ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
@@ -231,6 +245,10 @@ impl GenmcConfig {
         unimplemented!(
             "GenMC feature im Miri is disabled, cannot handle argument: \"-Zmiri-genmc{trimmed_arg}\""
         );
+    }
+
+    pub fn disable_data_race_detector(&mut self) {
+        unreachable!()
     }
 
     pub fn should_print_graph(&self, _rep: usize) -> bool {

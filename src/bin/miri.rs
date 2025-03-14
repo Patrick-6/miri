@@ -187,9 +187,61 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
         }
 
         if let Some(genmc_config) = &self.genmc_config {
-            let _genmc_ctx = Rc::new(GenmcCtx::new(&config, genmc_config));
+            let genmc_ctx = Rc::new(GenmcCtx::new(&config, genmc_config));
 
-            todo!("GenMC mode not yet implemented");
+            // TODO GENMC: remove this (it's here to prevent infinite loops during development):
+            let max_reps = 1024;
+
+            for rep in 0..max_reps {
+                tracing::info!("MIRI: running GenMC loop {}/{max_reps}", rep + 1);
+                let result = miri::eval_entry(
+                    tcx,
+                    entry_def_id,
+                    entry_type,
+                    &config,
+                    Some(genmc_ctx.clone()),
+                );
+
+                // TODO GENMC: is this the correct place to put this?
+
+                if genmc_config.should_print_graph(rep) {
+                    genmc_ctx.print_genmc_graph();
+                }
+
+                // TODO GENMC (ERROR REPORTING): we currently do this here, so we can still print the GenMC graph above
+                let return_code = result.unwrap_or_else(|| {
+                    tcx.dcx().abort_if_errors();
+                    rustc_driver::EXIT_FAILURE
+                });
+
+                let is_exploration_done = genmc_ctx.is_exploration_done();
+
+                tracing::info!(
+                    "(GenMC Mode) Execution done (return code: {return_code}), is_exploration_done: {is_exploration_done}",
+                );
+
+                if is_exploration_done {
+                    // TODO GENMC: proper message here, which info should be printed?
+                    let stuck_execution_count = genmc_ctx.get_stuck_execution_count();
+                    if stuck_execution_count == 0 {
+                        eprintln!("(GenMC Mode) Finished after {} iterations.", rep + 1);
+                    } else {
+                        // TODO GENMC: how should this be reported to the user?
+                        eprintln!(
+                            "(GenMC Mode) Finished after {} iterations, with {stuck_execution_count} {} getting stuck.",
+                            rep + 1,
+                            if stuck_execution_count == 1 { "execution" } else { "executions" }
+                        );
+                    }
+
+                    // TODO GENMC: what is an appropriate return code? (since there are possibly many)
+                    std::process::exit(return_code);
+                }
+            }
+            eprintln!(
+                "(GenMC Mode) Could not explore all interleavings in {max_reps} repetitions!"
+            );
+            std::process::exit(1);
         };
 
         if let Some(many_seeds) = self.many_seeds.take() {
@@ -643,8 +695,11 @@ fn main() {
         } else if arg == "-Zmiri-many-seeds-keep-going" {
             many_seeds_keep_going = true;
         } else if let Some(trimmed_arg) = arg.strip_prefix("-Zmiri-genmc") {
-            // FIXME(GenMC): Currently, GenMC mode is incompatible with aliasing model checking.
-            miri_config.borrow_tracker = None;
+            if !miri_config.genmc_mode {
+                miri_config.genmc_mode = true;
+                // FIXME(GenMC): Currently, GenMC mode is incompatible with aliasing model checking.
+                miri_config.borrow_tracker = None;
+            }
             GenmcConfig::parse_arg(&mut genmc_config, trimmed_arg);
         } else if let Some(param) = arg.strip_prefix("-Zmiri-env-forward=") {
             miri_config.forwarded_env_vars.push(param.to_owned());
@@ -781,9 +836,9 @@ fn main() {
 
     // Validate settings for data race detection and GenMC mode.
     assert_eq!(genmc_config.is_some(), miri_config.genmc_mode);
-    if genmc_config.is_some() {
+    if let Some(genmc_config) = genmc_config.as_mut() {
         if !miri_config.data_race_detector {
-            show_error!("Cannot disable data race detection in GenMC mode (currently)");
+            genmc_config.disable_data_race_detector();
         } else if !miri_config.weak_memory_emulation {
             show_error!("Cannot disable weak memory emulation in GenMC mode");
         }

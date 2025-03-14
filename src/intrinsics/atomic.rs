@@ -69,6 +69,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             }
         }
 
+        // TODO GENMC: notify GenMC about atomics
         match intrinsic_name {
             "load" => {
                 let ord = get_ord_at(1);
@@ -84,6 +85,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 let ord = get_ord_at(0);
                 this.atomic_fence_intrinsic(args, fence_ord(ord))?
             }
+            // TODO GENMC: what do do here?
             "singlethreadfence" => {
                 let ord = get_ord_at(0);
                 this.compiler_fence_intrinsic(args, fence_ord(ord))?;
@@ -237,6 +239,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
                 "atomic arithmetic operations only work on integer and raw pointer types",
             );
         }
+        // TODO GENMC: should this check be done in GenMC mode?
         if rhs.layout.ty != place.layout.ty {
             span_bug!(this.cur_span(), "atomic arithmetic operation type mismatch");
         }
