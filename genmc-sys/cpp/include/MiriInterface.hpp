@@ -171,6 +171,31 @@ struct MiriGenmcShim : private GenMCDriver {
         return nullptr;
     }
 
+    /**** Printing and estimation mode functionality. ****/
+
+    void print_estimation_results(const double elapsed_time_sec) const {
+        // FIXME(GenMC,cleanup): should this happen on the Rust side?
+        const auto& res = getResult();
+        const auto* conf = getConf();
+
+        long long mean = std::llround(res.estimationMean);
+        long long sd = std::llround(std::sqrt(res.estimationVariance));
+        long double meanTimeSecs =
+            (long double) elapsed_time_sec / (res.explored + res.exploredBlocked);
+        PRINT(VerbosityLevel::Error)
+            << std::format("Finished estimation in {:.2f} seconds.\n\n", elapsed_time_sec)
+            << std::format("Total executions estimate: {} (+- {})\n", mean, sd)
+            << std::format("Time to completion estimate: {:.2f}s\n", meanTimeSecs * mean);
+        // FIXME(genmc): support this setting from Miri
+        GENMC_DEBUG(if (conf->printEstimationStats) PRINT(VerbosityLevel::Error)
+                        << "Estimation moot: " << res.exploredMoot << "\n"
+                        << "Estimation blocked: " << res.exploredBlocked << "\n"
+                        << "Estimation complete: " << res.explored << "\n";);
+    }
+
+    static std::unique_ptr<MiriGenmcShim>
+    createHandle(const GenmcParams& config, bool estimation_mode);
+
   private:
     /** Increment the event index in the given thread by 1 and return the new event. */
     [[nodiscard]] inline auto inc_pos(ThreadId tid) -> Event {
@@ -192,12 +217,15 @@ struct MiriGenmcShim : private GenMCDriver {
     auto handle_load_reset_if_none(ThreadId tid, Ts&&... params) -> HandleResult<SVal> {
         const auto pos = inc_pos(tid);
         const auto ret = GenMCDriver::handleLoad<k>(pos, std::forward<Ts>(params)...);
-        // If we didn't get a value, we have to reset the index of the current thread.
+        // If we didn't get a value, we reset the index of the current thread.
         if (!std::holds_alternative<SVal>(ret)) {
             dec_pos(tid);
         }
         return ret;
     }
+
+    // TODO GENMC(mixed-size accesses):
+    std::unordered_map<SAddr, GenmcScalar> init_vals_ {};
 
     /**
      * GenMC uses the term `Action` to refer to a struct of:
@@ -208,6 +236,14 @@ struct MiriGenmcShim : private GenMCDriver {
      * indices, since GenMC expects us to do that.
      */
     std::vector<Action> threads_action_;
+
+    /**
+     * Map of already used annotation ids (e.g., for mutexes).
+     * FIXME(GenMC): For multithreading support, this map and the counter below need to be
+     * synchronized across threads.
+     */
+    std::unordered_map<uint64_t, ModuleID::ID> annotation_id {};
+    ModuleID::ID annotation_id_counter = 0;
 };
 
 /// Get the bit mask that GenMC expects for global memory allocations.

@@ -82,7 +82,6 @@ impl PerExecutionState {
     }
 }
 
-#[derive(Debug)]
 struct GlobalState {
     /// Keep track of global allocations, to ensure they keep the same address across different executions, even if the order of allocations changes.
     /// The `AllocId` for globals is stable across executions, so we can use it as an identifier.
@@ -127,6 +126,13 @@ impl GenmcCtx {
         let handle =
             RefCell::new(create_genmc_driver_handle(&genmc_config.params, genmc_config.log_level));
         Self { handle, exec_state: Default::default(), global_state }
+    }
+
+    /// Given the time taken for the estimation mode run,
+    /// print an estimation for how many executions the entire verification will require and give a total time estimate.
+    pub fn print_estimation_result(&self, elapsed_time: Duration) {
+        let elapsed_time_sec = elapsed_time.as_secs_f64();
+        self.handle.borrow().print_estimation_results(elapsed_time_sec);
     }
 
     /// Get the number of blocked executions encountered by GenMC.

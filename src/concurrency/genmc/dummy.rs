@@ -4,8 +4,8 @@ use rustc_const_eval::interpret::{AllocId, InterpCx, InterpResult};
 pub use self::run::run_genmc_mode;
 use crate::intrinsics::AtomicRmwOp;
 use crate::{
-    AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, MemoryKind, MiriMachine, Scalar,
-    ThreadId, ThreadManager, VisitProvenance, VisitWith,
+    AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, MemoryKind, MiriConfig,
+    MiriMachine, OpTy, Scalar, ThreadId, ThreadManager, VisitProvenance, VisitWith,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -36,8 +36,23 @@ mod run {
     }
 }
 
+pub(crate) mod scheduling {
+    use crate::{InterpResult, ThreadId};
+
+    impl<'tcx> EvalContextExt<'tcx> for crate::MiriInterpCx<'tcx> {}
+    pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
+        fn genmc_schedule_thread(&mut self) -> InterpResult<'tcx, ThreadId> {
+            unreachable!();
+        }
+    }
+}
+
 impl GenmcCtx {
     // We don't provide the `new` function in the dummy module.
+
+    pub fn print_estimation_result(&self) {
+        unreachable!()
+    }
 
     pub fn get_blocked_execution_count(&self) -> usize {
         unreachable!()
@@ -203,24 +218,24 @@ impl GenmcCtx {
     ) -> InterpResult<'tcx> {
         unreachable!()
     }
+}
 
-    /**** Scheduling functionality ****/
-
-    pub fn schedule_thread<'tcx>(
-        &self,
-        _ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
-    ) -> InterpResult<'tcx, ThreadId> {
+/// Other functionality not directly related to event handling
+impl<'tcx> EvalContextExt<'tcx> for crate::MiriInterpCx<'tcx> {}
+pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
+    fn check_genmc_intercept_function(
+        &mut self,
+        _instance: rustc_middle::ty::Instance<'tcx>,
+        _args: &[rustc_const_eval::interpret::FnArg<'tcx, crate::Provenance>],
+        _dest: &crate::PlaceTy<'tcx>,
+        _ret: Option<mir::BasicBlock>,
+    ) -> InterpResult<'tcx, bool> {
         unreachable!()
     }
 
     /**** Blocking instructions ****/
 
-    #[allow(unused)]
-    pub(crate) fn handle_verifier_assume<'tcx>(
-        &self,
-        _machine: &MiriMachine<'tcx>,
-        _condition: bool,
-    ) -> InterpResult<'tcx, ()> {
+    fn handle_genmc_verifier_assume(&mut self, _condition: &OpTy<'tcx>) -> InterpResult<'tcx> {
         unreachable!()
     }
 }

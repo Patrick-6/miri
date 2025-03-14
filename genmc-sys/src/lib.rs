@@ -55,9 +55,10 @@ impl Default for GenmcParams {
     fn default() -> Self {
         Self {
             print_random_schedule_seed: false,
-            do_symmetry_reduction: false,
+            do_symmetry_reduction: false, // TODO GENMC (PERFORMANCE): maybe make this default `true`
+            estimation_max: 1000,
             // GenMC graphs can be quite large since Miri produces a lot of (non-atomic) events.
-            print_execution_graphs: ExecutiongraphPrinting::None,
+            print_execution_graphs: Default::None,
             disable_weak_memory_emulation: false,
         }
     }
@@ -65,6 +66,7 @@ impl Default for GenmcParams {
 
 impl Default for LogLevel {
     fn default() -> Self {
+        // FIXME(genmc): set `Warning` by default once changes to GenMC are upstreamed.
         // FIXME(genmc): set `Tip` by default once the GenMC tips are relevant to Miri.
         Self::Warning
     }
@@ -95,8 +97,10 @@ mod ffi {
     /// (The fields of this struct are visible to both Rust and C++)
     #[derive(Clone, Debug)]
     struct GenmcParams {
+        // pub genmc_seed: u64; // OR: Option<u64>
         pub print_random_schedule_seed: bool,
         pub do_symmetry_reduction: bool,
+        pub estimation_max: u32,
         pub print_execution_graphs: ExecutiongraphPrinting,
         /// Enabling this will set the memory model used by GenMC to "Sequential Consistency" (SC).
         pub disable_weak_memory_emulation: bool,
@@ -377,5 +381,10 @@ mod ffi {
         fn get_result_message(self: &MiriGenmcShim) -> UniquePtr<CxxString>;
         /// If an error occurred, return a string describing the error, otherwise, return `nullptr`.
         fn get_error_string(self: &MiriGenmcShim) -> UniquePtr<CxxString>;
+
+        /**** Printing functionality. ****/
+
+        /// Print the results of a run in estimation mode.
+        fn print_estimation_results(self: &MiriGenmcShim, elapsed_time_sec: f64);
     }
 }
