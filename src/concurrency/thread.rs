@@ -110,10 +110,12 @@ pub enum BlockReason {
     Eventfd,
     /// Blocked on unnamed_socket.
     UnnamedSocket,
+    /// Blocked on a GenMC `assume` statement (GenMC mode only).
+    GenmcAssume,
 }
 
 /// The state of a thread.
-enum ThreadState<'tcx> {
+pub(crate) enum ThreadState<'tcx> {
     /// The thread is enabled and can be executed.
     Enabled,
     /// The thread is blocked on something.
@@ -143,7 +145,7 @@ impl<'tcx> ThreadState<'tcx> {
         matches!(self, ThreadState::Terminated)
     }
 
-    fn is_blocked_on(&self, reason: BlockReason) -> bool {
+    pub(crate) fn is_blocked_on(&self, reason: BlockReason) -> bool {
         matches!(*self, ThreadState::Blocked { reason: actual_reason, .. } if actual_reason == reason)
     }
 }
@@ -212,6 +214,13 @@ impl<'tcx> Thread<'tcx> {
     /// Return whether this thread is enabled or not.
     pub fn is_enabled(&self) -> bool {
         self.state.is_enabled()
+    }
+
+    /// Get the current state of this thread.
+    // TODO: is this ok to expose?
+    #[allow(unused)]
+    pub(crate) fn get_state(&self) -> &ThreadState<'tcx> {
+        &self.state
     }
 
     /// Get the name of the current thread for display purposes; will include thread ID if not set.
@@ -348,8 +357,9 @@ impl VisitProvenance for Frame<'_, Provenance, FrameExtra<'_>> {
 }
 
 /// The moment in time when a blocked thread should be woken up.
+// TODO GENMC: is this ok to be pub?
 #[derive(Debug)]
-enum Timeout {
+pub enum Timeout {
     Monotonic(Instant),
     RealTime(SystemTime),
 }
@@ -526,9 +536,19 @@ impl<'tcx> ThreadManager<'tcx> {
         self.active_thread
     }
 
+    pub fn threads_ref(&self) -> &IndexVec<ThreadId, Thread<'tcx>> {
+        // TODO GENMC: should this implementation detail be exposed?
+        &self.threads
+    }
+
     /// Get the total number of threads that were ever spawn by this program.
     pub fn get_total_thread_count(&self) -> usize {
         self.threads.len()
+    }
+
+    /// Get the total of threads that are currently enabled, i.e., could continue executing.
+    pub fn get_enabled_thread_count(&self) -> usize {
+        self.threads.iter().filter(|t| t.state.is_enabled()).count()
     }
 
     /// Get the total of threads that are currently live, i.e., not yet terminated.
@@ -572,6 +592,7 @@ impl<'tcx> ThreadManager<'tcx> {
     /// See <https://docs.microsoft.com/en-us/windows/win32/procthread/thread-handles-and-identifiers>:
     /// > The handle is valid until closed, even after the thread it represents has been terminated.
     fn detach_thread(&mut self, id: ThreadId, allow_terminated_joined: bool) -> InterpResult<'tcx> {
+        // FIXME(genmc): does GenMC need to know about detached threads?
         trace!("detaching {:?}", id);
 
         let is_ub = if allow_terminated_joined && self.threads[id].state.is_terminated() {
