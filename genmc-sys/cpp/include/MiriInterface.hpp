@@ -35,9 +35,14 @@ struct LoadResult;
 struct StoreResult;
 struct ReadModifyWriteResult;
 struct CompareExchangeResult;
+struct MutexLockResult;
 
 // GenMC uses `int` for its thread IDs.
 using ThreadId = int;
+
+// Types used for GenMC annotations, e.g., in `handle_mutex_unlock`.
+using AnnotID = ModuleID::ID;
+using AnnotT = SExpr<AnnotID>;
 
 /// Set the log level for GenMC.
 ///
@@ -132,6 +137,15 @@ struct MiriGenmcShim : private GenMCDriver {
     void handle_thread_join(ThreadId thread_id, ThreadId child_id);
     void handle_thread_finish(ThreadId thread_id, uint64_t ret_val);
     void handle_thread_kill(ThreadId thread_id);
+
+    /**** Blocking instructions ****/
+    void handle_thread_block(ThreadId thread_id);
+
+    /**** Mutex handling ****/
+    auto handle_mutex_lock(ThreadId thread_id, uint64_t address, uint64_t size) -> MutexLockResult;
+    auto handle_mutex_try_lock(ThreadId thread_id, uint64_t address, uint64_t size)
+        -> MutexLockResult;
+    auto handle_mutex_unlock(ThreadId thread_id, uint64_t address, uint64_t size) -> StoreResult;
 
     /***** Exploration related functionality *****/
 
@@ -381,5 +395,16 @@ inline CompareExchangeResult from_error(std::unique_ptr<std::string> error) {
                                    /* is_coherence_order_maximal_write: */ false };
 }
 } // namespace CompareExchangeResultExt
+
+namespace MutexLockResultExt {
+inline MutexLockResult ok(bool is_lock_acquired) {
+    return MutexLockResult { /* error: */ nullptr, is_lock_acquired };
+}
+
+inline MutexLockResult from_error(std::unique_ptr<std::string> error) {
+    return MutexLockResult { /* error: */ std::move(error),
+                             /* is_lock_acquired: */ false };
+}
+} // namespace MutexLockResultExt
 
 #endif /* GENMC_MIRI_INTERFACE_HPP */

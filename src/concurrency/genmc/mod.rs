@@ -20,11 +20,12 @@ use self::helper::{
 use self::thread_id_map::ThreadIdMap;
 use crate::concurrency::genmc::helper::split_access;
 use crate::concurrency::genmc::warnings::WarningsCache;
+use crate::concurrency::thread::EvalContextExt as _;
 use crate::intrinsics::AtomicRmwOp;
 use crate::{
-    AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, MemoryKind, MiriConfig,
-    MiriMachine, MiriMemoryKind, Scalar, TerminationInfo, ThreadId, ThreadManager, VisitProvenance,
-    VisitWith,
+    AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, BlockReason, MachineCallback,
+    MemoryKind, MiriConfig, MiriInterpCx, MiriMachine, MiriMemoryKind, OpTy, Scalar,
+    TerminationInfo, ThreadId, ThreadManager, UnblockKind, VisitProvenance, VisitWith, callback,
 };
 
 mod config;
@@ -710,17 +711,6 @@ impl GenmcCtx {
         self.exec_state.exit_status.set(Some(exit_status));
         interp_ok(())
     }
-
-    /**** Blocking instructions ****/
-
-    #[allow(unused)]
-    pub(crate) fn handle_verifier_assume<'tcx>(
-        &self,
-        machine: &MiriMachine<'tcx>,
-        condition: bool,
-    ) -> InterpResult<'tcx, ()> {
-        if condition { interp_ok(()) } else { self.handle_user_block(machine) }
-    }
 }
 
 impl GenmcCtx {
@@ -881,8 +871,182 @@ impl GenmcCtx {
     /// Handle a user thread getting blocked.
     /// This may happen due to an manual `assume` statement added by a user
     /// or added by some automated program transformation, e.g., for spinloops.
-    fn handle_user_block<'tcx>(&self, _machine: &MiriMachine<'tcx>) -> InterpResult<'tcx> {
-        todo!()
+    fn handle_user_block<'tcx>(&self, machine: &MiriMachine<'tcx>) -> InterpResult<'tcx> {
+        let thread_infos = self.exec_state.thread_id_manager.borrow();
+        let curr_thread = machine.threads.active_thread();
+        let genmc_curr_thread = thread_infos.get_genmc_tid(curr_thread);
+        debug!("GenMC: handle_user_block, blocking thread {curr_thread:?} ({genmc_curr_thread:?})");
+
+        self.handle.borrow_mut().pin_mut().handle_thread_block(genmc_curr_thread);
+
+        interp_ok(())
+    }
+}
+
+/// Other functionality not directly related to event handling
+impl<'tcx> EvalContextExt<'tcx> for crate::MiriInterpCx<'tcx> {}
+pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
+    /// Given a `ty::Instance<'tcx>`, do any required special handling. Returns true if this `instance` should be skipped (i.e., no Mir should be executed for it).
+    fn check_genmc_intercept_function(
+        &mut self,
+        instance: rustc_middle::ty::Instance<'tcx>,
+        args: &[rustc_const_eval::interpret::FnArg<'tcx, crate::Provenance>],
+        dest: &crate::PlaceTy<'tcx>,
+        ret: Option<rustc_middle::mir::BasicBlock>,
+    ) -> InterpResult<'tcx, bool> {
+        let this = self.eval_context_mut();
+        let genmc_ctx = this
+            .machine
+            .data_race
+            .as_genmc_ref()
+            .expect("This function should only be called in GenMC mode.");
+
+        let get_mutex_call_infos = || {
+            // assert!(!args.is_empty());
+            assert_eq!(args.len(), 1);
+            let arg = this.copy_fn_arg(&args[0]);
+            let addr = this.read_target_usize(&arg)?;
+            // FIXME(genmc): assert that we have at least 1 byte.
+            // FIXME(genmc): maybe use actual size of mutex here?.
+
+            let thread_infos = genmc_ctx.exec_state.thread_id_manager.borrow();
+            let curr_thread = this.machine.threads.active_thread();
+            let genmc_curr_thread = thread_infos.get_genmc_tid(curr_thread);
+            interp_ok((genmc_curr_thread, addr, 1))
+        };
+
+        use rustc_span::sym;
+        if this.tcx.is_diagnostic_item(sym::sys_mutex_lock, instance.def_id()) {
+            debug!("GenMC: handling Mutex::lock()");
+            let (genmc_curr_thread, addr, size) = get_mutex_call_infos()?;
+
+            let result = genmc_ctx.handle.borrow_mut().pin_mut().handle_mutex_lock(
+                genmc_curr_thread,
+                addr,
+                size,
+            );
+            if let Some(error) = result.error.as_ref() {
+                throw_ub_format!("{}", error.to_string_lossy());
+            }
+            // TODO GENMC(HACK): for determining if the Mutex lock blocks this thread.
+            if !result.is_lock_acquired {
+                fn create_callback<'tcx>(
+                    genmc_curr_thread: i32,
+                    addr: u64,
+                    size: u64,
+                ) -> crate::DynUnblockCallback<'tcx> {
+                    crate::callback!(
+                        @capture<'tcx> {
+                            // mutex_ref: MutexRef,
+                            // retval_dest: Option<(Scalar, MPlaceTy<'tcx>)>,
+                            genmc_curr_thread: i32,
+                            addr: u64,
+                            size: u64,
+                        }
+                        |this, unblock: crate::UnblockKind| {
+                            assert_eq!(unblock, crate::UnblockKind::Ready);
+                            let genmc_ctx = this.machine.data_race.as_genmc_ref().unwrap();
+
+                            debug!("GenMC: handling Mutex::lock: unblocking callback called!");
+                            let result =
+                                genmc_ctx.handle.borrow_mut().pin_mut().handle_mutex_lock(genmc_curr_thread, addr, size);
+                            if let Some(error) = result.error.as_ref() {
+                                throw_ub_format!("{}", error.to_string_lossy());
+                            }
+                            // TODO GENMC(HACK): for determining if the Mutex lock blocks this thread.
+                            if !result.is_lock_acquired {
+                                // If this thread gets woken up without the mutex being made available, block the thread again.
+                                this.block_thread( crate::BlockReason::Mutex, None, create_callback(genmc_curr_thread, addr, size));
+                            }
+                            interp_ok(())
+                        }
+                    )
+                }
+
+                debug!("GenMC: handling Mutex::lock failed, blocking thread");
+                // NOTE: We don't write anything back to Miri's memory, the Mutex state is handled only by GenMC.
+
+                this.block_thread(
+                    crate::BlockReason::Mutex,
+                    None,
+                    create_callback(genmc_curr_thread, addr, size),
+                );
+            } else {
+                debug!("GenMC: handling Mutex::lock: success: lock acquired.");
+            }
+        } else if this.tcx.is_diagnostic_item(sym::sys_mutex_try_lock, instance.def_id()) {
+            debug!("GenMC: handling Mutex::try_lock()");
+            let (genmc_curr_thread, addr, size) = get_mutex_call_infos()?;
+
+            let result = genmc_ctx.handle.borrow_mut().pin_mut().handle_mutex_try_lock(
+                genmc_curr_thread,
+                addr,
+                size,
+            );
+            if let Some(error) = result.error.as_ref() {
+                throw_ub_format!("{}", error.to_string_lossy());
+            }
+            debug!(
+                "GenMC: Mutex::try_lock(): writing resulting bool is_lock_acquired ({}) to place: {dest:?}",
+                result.is_lock_acquired
+            );
+
+            this.write_scalar(Scalar::from_bool(result.is_lock_acquired), dest)?;
+            // todo!("return whether lock was successful or not");
+        } else if this.tcx.is_diagnostic_item(sym::sys_mutex_unlock, instance.def_id()) {
+            debug!("GenMC: handling Mutex::unlock()");
+            let (genmc_curr_thread, addr, size) = get_mutex_call_infos()?;
+
+            let result = genmc_ctx.handle.borrow_mut().pin_mut().handle_mutex_unlock(
+                genmc_curr_thread,
+                addr,
+                size,
+            );
+            if let Some(error) = result.error.as_ref() {
+                throw_ub_format!("{}", error.to_string_lossy());
+            }
+            // NOTE: We don't write anything back to Miri's memory, the Mutex state is handled only by GenMC.
+        } else {
+            return interp_ok(false);
+        };
+
+        this.return_to_block(ret)?;
+
+        interp_ok(true)
+    }
+
+    /**** Blocking instructions ****/
+
+    /// Handle an `assume` statement. This will tell GenMC to block the current thread if the `condition` is false.
+    /// Returns `true` if the current thread should be blocked in Miri too.
+    fn handle_genmc_verifier_assume(&mut self, condition: &OpTy<'tcx>) -> InterpResult<'tcx> {
+        let this = self.eval_context_mut();
+        let condition_bool = this.read_scalar(condition)?.to_bool()?;
+        debug!("GenMC: handle_genmc_verifier_assume, condition: {condition:?} = {condition_bool}");
+        if condition_bool {
+            return interp_ok(());
+        }
+        let genmc_ctx = this.machine.data_race.as_genmc_ref().unwrap();
+        genmc_ctx.handle_user_block(&this.machine)?;
+        let condition = condition.clone();
+        this.block_thread(
+            BlockReason::GenmcAssume,
+            None,
+            callback!(
+                @capture<'tcx> {
+                    condition: OpTy<'tcx>,
+                }
+                |this, unblock: UnblockKind| {
+                    assert_eq!(unblock, UnblockKind::Ready);
+
+                    let condition = this.run_for_validation_ref(|this| this.read_scalar(&condition))?.to_bool()?;
+                    assert!(condition);
+
+                    interp_ok(())
+                }
+            ),
+        );
+        interp_ok(())
     }
 }
 

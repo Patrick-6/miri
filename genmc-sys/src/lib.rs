@@ -225,17 +225,12 @@ mod ffi {
 
     #[must_use]
     #[derive(Debug)]
-    struct CompareExchangeResult {
+    struct MutexLockResult {
         /// If there was an error, it will be stored in `error`, otherwise it is `None`.
         error: UniquePtr<CxxString>,
-        /// The value that was read by the compare-exchange.
-        old_value: GenmcScalar,
-        /// `true` if compare_exchange op was successful.
-        is_success: bool,
-        /// `true` if the write should also be reflected in Miri's memory representation.
-        is_coherence_order_maximal_write: bool,
+        /// Indicate whether the lock was acquired by this thread.
+        is_lock_acquired: bool,
     }
-
 
     /**** These are GenMC types that we have to copy-paste here since cxx does not support
     "importing" externally defined C++ types. ****/
@@ -396,6 +391,29 @@ mod ffi {
         fn handle_thread_join(self: Pin<&mut MiriGenmcShim>, thread_id: i32, child_id: i32);
         fn handle_thread_finish(self: Pin<&mut MiriGenmcShim>, thread_id: i32, ret_val: u64);
         fn handle_thread_kill(self: Pin<&mut MiriGenmcShim>, thread_id: i32);
+
+        /**** Blocking instructions ****/
+        fn handle_thread_block(self: Pin<&mut MiriGenmcShim>, thread_id: i32);
+
+        /**** Mutex handling ****/
+        fn handle_mutex_lock(
+            self: Pin<&mut MiriGenmcShim>,
+            thread_id: i32,
+            address: u64,
+            size: u64,
+        ) -> MutexLockResult;
+        fn handle_mutex_try_lock(
+            self: Pin<&mut MiriGenmcShim>,
+            thread_id: i32,
+            address: u64,
+            size: u64,
+        ) -> MutexLockResult;
+        fn handle_mutex_unlock(
+            self: Pin<&mut MiriGenmcShim>,
+            thread_id: i32,
+            address: u64,
+            size: u64,
+        ) -> StoreResult;
 
         /***** Exploration related functionality *****/
 
