@@ -1,0 +1,128 @@
+Running GenMC Verification...
+warning: GenMC currently does not model the failure ordering for `compare_exchange`. Due to success ordering 'Acquire', the failure ordering 'Relaxed' is treated like 'Acquire'. Miri with GenMC might miss bugs related to this memory access.
+  --> RUSTLIB/std/src/sys/sync/PLATFORM/futex.rs:LL:CC
+   |
+LL |               || self
+   |  ________________^
+LL | |                 .state
+LL | |                 .compare_exchange_weak(state, state + READ_LOCKED, Acquire, Relaxed)
+   | |____________________________________________________________________________________^ GenMC might miss possible behaviors of this code
+   |
+   = note: BACKTRACE:
+   = note: inside `std::sys::sync::PLATFORM::futex::RwLock::read` at RUSTLIB/std/src/sys/sync/PLATFORM/futex.rs:LL:CC
+   = note: inside `std::sync::RwLock::<()>::read` at RUSTLIB/std/src/sync/poison/rwlock.rs:LL:CC
+   = note: inside `std::sys::env::PLATFORM::env_read_lock` at RUSTLIB/std/src/sys/env/PLATFORM.rs:LL:CC
+   = note: inside closure at RUSTLIB/std/src/sys/env/PLATFORM.rs:LL:CC
+   = note: inside `std::sys::pal::PLATFORM::small_c_string::run_with_cstr_stack::<std::option::Option<std::ffi::OsString>>` at RUSTLIB/std/src/sys/pal/PLATFORM/small_c_string.rs:LL:CC
+   = note: inside `std::sys::pal::PLATFORM::small_c_string::run_with_cstr::<std::option::Option<std::ffi::OsString>>` at RUSTLIB/std/src/sys/pal/PLATFORM/small_c_string.rs:LL:CC
+   = note: inside `std::sys::env::PLATFORM::getenv` at RUSTLIB/std/src/sys/env/PLATFORM.rs:LL:CC
+   = note: inside `std::env::_var_os` at RUSTLIB/std/src/env.rs:LL:CC
+   = note: inside `std::env::var_os::<&str>` at RUSTLIB/std/src/env.rs:LL:CC
+   = note: inside closure at RUSTLIB/std/src/thread/mod.rs:LL:CC
+note: inside `miri_start`
+  --> tests/genmc/fail/loom/store_buffering.rs:LL:CC
+   |
+LL |               let t1 = std::thread::spawn(|| {
+   |  ______________________^
+LL | |                 x.store(1, Relaxed);
+LL | |                 y.load(Relaxed)
+LL | |             });
+   | |______________^
+
+warning: GenMC currently does not model spurious failures of `compare_exchange_weak`. Miri with GenMC might miss bugs related to spurious failures.
+  --> RUSTLIB/std/src/sys/sync/PLATFORM/futex.rs:LL:CC
+   |
+LL |               || self
+   |  ________________^
+LL | |                 .state
+LL | |                 .compare_exchange_weak(state, state + READ_LOCKED, Acquire, Relaxed)
+   | |____________________________________________________________________________________^ GenMC might miss possible behaviors of this code
+   |
+   = note: BACKTRACE:
+   = note: inside `std::sys::sync::PLATFORM::futex::RwLock::read` at RUSTLIB/std/src/sys/sync/PLATFORM/futex.rs:LL:CC
+   = note: inside `std::sync::RwLock::<()>::read` at RUSTLIB/std/src/sync/poison/rwlock.rs:LL:CC
+   = note: inside `std::sys::env::PLATFORM::env_read_lock` at RUSTLIB/std/src/sys/env/PLATFORM.rs:LL:CC
+   = note: inside closure at RUSTLIB/std/src/sys/env/PLATFORM.rs:LL:CC
+   = note: inside `std::sys::pal::PLATFORM::small_c_string::run_with_cstr_stack::<std::option::Option<std::ffi::OsString>>` at RUSTLIB/std/src/sys/pal/PLATFORM/small_c_string.rs:LL:CC
+   = note: inside `std::sys::pal::PLATFORM::small_c_string::run_with_cstr::<std::option::Option<std::ffi::OsString>>` at RUSTLIB/std/src/sys/pal/PLATFORM/small_c_string.rs:LL:CC
+   = note: inside `std::sys::env::PLATFORM::getenv` at RUSTLIB/std/src/sys/env/PLATFORM.rs:LL:CC
+   = note: inside `std::env::_var_os` at RUSTLIB/std/src/env.rs:LL:CC
+   = note: inside `std::env::var_os::<&str>` at RUSTLIB/std/src/env.rs:LL:CC
+   = note: inside closure at RUSTLIB/std/src/thread/mod.rs:LL:CC
+note: inside `miri_start`
+  --> tests/genmc/fail/loom/store_buffering.rs:LL:CC
+   |
+LL |               let t1 = std::thread::spawn(|| {
+   |  ______________________^
+LL | |                 x.store(1, Relaxed);
+LL | |                 y.load(Relaxed)
+LL | |             });
+   | |______________^
+
+warning: GenMC currently does not model spurious failures of `compare_exchange_weak`. Miri with GenMC might miss bugs related to spurious failures.
+  --> RUSTLIB/std/src/thread/mod.rs:LL:CC
+   |
+LL |                     match COUNTER.compare_exchange_weak(last, id, Ordering::Relaxed, Ordering::Relaxed) {
+   |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ GenMC might miss possible behaviors of this code
+   |
+   = note: BACKTRACE:
+   = note: inside `std::thread::ThreadId::new` at RUSTLIB/std/src/thread/mod.rs:LL:CC
+note: inside `miri_start`
+  --> tests/genmc/fail/loom/store_buffering.rs:LL:CC
+   |
+LL |               let t2 = std::thread::spawn(|| {
+   |  ______________________^
+LL | |                 y.store(1, Relaxed);
+LL | |                 x.load(Relaxed)
+LL | |             });
+   | |______________^
+
+warning: GenMC currently does not model the failure ordering for `compare_exchange`. Due to success ordering 'Acquire', the failure ordering 'Relaxed' is treated like 'Acquire'. Miri with GenMC might miss bugs related to this memory access.
+  --> RUSTLIB/alloc/src/sync.rs:LL:CC
+   |
+LL |         if this.inner().weak.compare_exchange(1, usize::MAX, Acquire, Relaxed).is_ok() {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ GenMC might miss possible behaviors of this code
+   |
+   = note: BACKTRACE:
+   = note: inside `std::sync::Arc::<std::thread::Packet<'_, usize>>::is_unique` at RUSTLIB/alloc/src/sync.rs:LL:CC
+   = note: inside `std::sync::Arc::<std::thread::Packet<'_, usize>>::get_mut` at RUSTLIB/alloc/src/sync.rs:LL:CC
+   = note: inside `std::thread::JoinInner::<'_, usize>::join` at RUSTLIB/std/src/thread/mod.rs:LL:CC
+   = note: inside `std::thread::JoinHandle::<usize>::join` at RUSTLIB/std/src/thread/mod.rs:LL:CC
+note: inside `miri_start`
+  --> tests/genmc/fail/loom/store_buffering.rs:LL:CC
+   |
+LL |             let a = t1.join().unwrap();
+   |                     ^^^^^^^^^
+
+warning: GenMC currently does not model the failure ordering for `compare_exchange`. Due to success ordering 'Acquire', the failure ordering 'Relaxed' is treated like 'Acquire'. Miri with GenMC might miss bugs related to this memory access.
+  --> RUSTLIB/alloc/src/sync.rs:LL:CC
+   |
+LL |         if this.inner().weak.compare_exchange(1, usize::MAX, Acquire, Relaxed).is_ok() {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ GenMC might miss possible behaviors of this code
+   |
+   = note: BACKTRACE:
+   = note: inside `std::sync::Arc::<std::thread::Packet<'_, usize>>::is_unique` at RUSTLIB/alloc/src/sync.rs:LL:CC
+   = note: inside `std::sync::Arc::<std::thread::Packet<'_, usize>>::get_mut` at RUSTLIB/alloc/src/sync.rs:LL:CC
+   = note: inside `std::thread::JoinInner::<'_, usize>::join` at RUSTLIB/std/src/thread/mod.rs:LL:CC
+   = note: inside `std::thread::JoinHandle::<usize>::join` at RUSTLIB/std/src/thread/mod.rs:LL:CC
+note: inside `miri_start`
+  --> tests/genmc/fail/loom/store_buffering.rs:LL:CC
+   |
+LL |             let b = t2.join().unwrap();
+   |                     ^^^^^^^^^
+
+error: abnormal termination: the program aborted execution
+  --> tests/genmc/fail/loom/store_buffering.rs:LL:CC
+   |
+LL |             std::process::abort();
+   |             ^^^^^^^^^^^^^^^^^^^^^ abnormal termination occurred here
+   |
+   = note: BACKTRACE:
+   = note: inside `miri_start` at tests/genmc/fail/loom/store_buffering.rs:LL:CC
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
+
+note: add `-Zmiri-genmc-print-genmc-output` to MIRIFLAGS to see the detailed GenMC error report
+
+error: aborting due to 1 previous error; 5 warnings emitted
+
