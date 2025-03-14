@@ -246,9 +246,10 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
             }
         };
         eprintln!("addr_from_alloc_id_uncached: {alloc_id:?} --> {addr}");
+        // TODO GENMC: document why this is here (because address of allocation not known in `init_alloc_extra`)
         if let Some(genmc_ctx) = &this.machine.genmc_ctx {
             let requested_address = addr.try_into().unwrap();
-            genmc_ctx.handle_alloc(alloc_id, requested_address, info.size, info.align).unwrap(); // TODO GENMC: proper error handling
+            genmc_ctx.handle_alloc(&this.machine, alloc_id, requested_address, info.size, info.align).unwrap(); // TODO GENMC: proper error handling
         }
         interp_ok(addr)
     }

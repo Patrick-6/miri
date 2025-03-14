@@ -714,7 +714,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
             let (alloc_id, _) = this.ptr_get_alloc(ptr, size).unwrap();
             
             let size = place.layout.size.bytes_usize();
-            genmc_ctx.atomic_load(alloc_id, address, size, atomic).unwrap(); // TODO GENMC proper error handling
+            genmc_ctx.atomic_load(&this.machine, alloc_id, address, size, atomic).unwrap(); // TODO GENMC proper error handling
         }
 
         interp_ok(value)
@@ -747,7 +747,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
             let (alloc_id, _) = this.ptr_get_alloc(ptr, size).unwrap();
 
             let size = dest.layout.size.bytes_usize();
-            genmc_ctx.atomic_store(alloc_id, address, size, val, atomic).unwrap(); // TODO GENMC proper error handling
+            genmc_ctx.atomic_store(&this.machine, alloc_id, address, size, val, atomic).unwrap(); // TODO GENMC proper error handling
         }
 
         this.buffered_atomic_write(val, dest, atomic, old_val)

@@ -28,13 +28,14 @@ use std::env::{self, VarError};
 use std::num::NonZero;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, Once};
 
 use miri::{
-    BacktraceStyle, BorrowTrackerMethod, MiriConfig, MiriEntryFnType, ProvenanceMode, RetagFields,
-    ValidationMode,
+    BacktraceStyle, BorrowTrackerMethod, GenmcCtx, MiriConfig, MiriEntryFnType, ProvenanceMode,
+    RetagFields, ValidationMode,
 };
 use rustc_abi::ExternAbi;
 use rustc_data_structures::sync;
@@ -179,6 +180,8 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
                     optimizations is usually marginal at best.");
         }
 
+        let genmc_ctx = config.genmc_config.as_ref().map(GenmcCtx::new).map(Rc::new);
+
         if let Some(many_seeds) = self.many_seeds.take() {
             assert!(config.seed.is_none());
             let exit_code = sync::IntoDynSyncSend(AtomicI32::new(rustc_driver::EXIT_SUCCESS));
@@ -187,7 +190,7 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
                 let mut config = config.clone();
                 config.seed = Some(seed.into());
                 eprintln!("Trying seed: {seed}");
-                let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, config)
+                let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, config, None)
                     .unwrap_or(rustc_driver::EXIT_FAILURE);
                 if return_code != rustc_driver::EXIT_SUCCESS {
                     eprintln!("FAILING SEED: {seed}");
@@ -208,7 +211,7 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
         // } else if let Some(genmc_config) = config.genmc_config {
         //     todo!() // TODO GENMC: implement GenMC loop
         } else {
-            let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, config)
+            let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, config, genmc_ctx)
                 .unwrap_or_else(|| {
                     tcx.dcx().abort_if_errors();
                     rustc_driver::EXIT_FAILURE

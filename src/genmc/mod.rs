@@ -7,7 +7,9 @@ use rustc_abi::{Align, Size};
 use rustc_middle::mir::interpret::AllocId;
 
 use self::ffi::{MemoryOrdering, MiriGenMCShim, createGenmcHandle};
-use crate::{AtomicReadOrd, AtomicWriteOrd, MemoryKind};
+use crate::{AtomicReadOrd, AtomicWriteOrd, MemoryKind, MiriMachine, ThreadId};
+
+mod cxx_extra;
 
 // TODO GENMC: extract the ffi module if possible, to reduce number of required recompilation
 #[cxx::bridge]
@@ -35,8 +37,12 @@ mod ffi {
         fn createGenmcHandle(/* GenmcConfig config */ /* OperatingMode */)
          -> UniquePtr<MiriGenMCShim>;
 
+        fn handleExecutionStart(self: Pin<&mut MiriGenMCShim>);
+        fn handleExecutionEnd(self: Pin<&mut MiriGenMCShim>);
+
         fn handleLoad(
             self: Pin<&mut MiriGenMCShim>,
+            thread_id: u32,
             alloc_id: u64,
             address: usize,
             size: usize,
@@ -44,6 +50,7 @@ mod ffi {
         );
         fn handleStore(
             self: Pin<&mut MiriGenMCShim>,
+            thread_id: u32,
             alloc_id: u64,
             address: usize,
             size: usize,
@@ -51,8 +58,10 @@ mod ffi {
             // value: u128, // TODO GENMC: handle this
             memory_ordering: MemoryOrdering,
         );
+
         fn handleMalloc(
             self: Pin<&mut MiriGenMCShim>,
+            thread_id: u32,
             alloc_id: u64,
             requested_address: usize,
             size: usize,
@@ -60,10 +69,19 @@ mod ffi {
         );
         fn handleFree(
             self: Pin<&mut MiriGenMCShim>,
+            thread_id: u32,
             alloc_id: u64,
             /* address: usize, */
             size: usize,
         );
+
+        // fn handleThreadKill(self: Pin<&mut MiriGenMCShim>, thread_id: u32, parent_id: u32);
+        fn handleThreadCreate(self: Pin<&mut MiriGenMCShim>, thread_id: u32, parent_id: u32);
+        // fn handleThreadJoin(self: Pin<&mut MiriGenMCShim>, thread_id: u32, parent_id: u32);
+        // fn handleThreadFinish(self: Pin<&mut MiriGenMCShim>, thread_id: u32, parent_id: u32);
+
+        fn isHalting(self: &MiriGenMCShim) -> bool;
+        fn isMoot(self: &MiriGenMCShim) -> bool;
         fn printGraph(self: Pin<&mut MiriGenMCShim>);
     }
 }
@@ -136,7 +154,7 @@ fn scalar_to_genmc_scalar(value: crate::Scalar) -> u64 {
 }
 
 impl GenmcCtx {
-    pub(crate) fn new(config: &GenmcConfig) -> Self {
+    pub fn new(config: &GenmcConfig) -> Self {
         // Need to call into GenMC, create new Model Checker
         // Store handle to Model Checker in the struct
 
@@ -149,9 +167,50 @@ impl GenmcCtx {
         Self { handle }
     }
 
+    pub fn print_genmc_graph(&self) {
+        eprintln!("MIRI: attempting to get GenMC to print the Execution graph...");
+        let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
+        let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
+        pinned_mc.printGraph();
+    }
+
+    pub fn is_halting(&self) -> bool {
+        eprintln!("MIRI: ask if GenMC is halting...");
+        let mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
+        let mc = mc_lock.as_ref().expect("model checker should not be null");
+        mc.isHalting()
+    }
+
+    pub fn is_moot(&self) -> bool {
+        eprintln!("MIRI: ask if GenMC execution is moot...");
+        let mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
+        let mc = mc_lock.as_ref().expect("model checker should not be null");
+        mc.isMoot()
+    }
+
+    /**** Memory access handling ****/
+
+    pub(crate) fn handle_execution_start(&self) {
+        eprintln!("MIRI (TODO GENMC): inform GenMC that new execution started!");
+        // todo!();
+        let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
+        let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
+        pinned_mc.handleExecutionStart();
+    }
+
+    pub(crate) fn handle_execution_end(&self) {
+        eprintln!("MIRI (TODO GENMC): inform GenMC that execution ended!");
+        // todo!();
+        let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
+        let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
+        pinned_mc.handleExecutionEnd();
+        // TODO GENMC: could return as result here maybe?
+    }
+
     //* might fails if there's a race, load might also not read anything (returns None) */
-    pub(crate) fn atomic_load(
+    pub(crate) fn atomic_load<'tcx>(
         &self,
+        machine: &MiriMachine<'tcx>,
         alloc_id: AllocId,
         address: usize,
         size: usize,
@@ -159,11 +218,12 @@ impl GenmcCtx {
     ) -> Result<(), ()> {
         let ordering = ordering.convert();
         eprintln!("MIRI: atomic_load with ordering {ordering:?}");
-        self.atomic_load_impl(alloc_id, address, size, ordering)
+        self.atomic_load_impl(machine, alloc_id, address, size, ordering)
     }
 
-    pub(crate) fn atomic_store(
+    pub(crate) fn atomic_store<'tcx>(
         &self,
+        machine: &MiriMachine<'tcx>,
         alloc_id: AllocId,
         address: usize,
         size: usize,
@@ -176,32 +236,41 @@ impl GenmcCtx {
         eprintln!(
             "MIRI: atomic_store with ordering {ordering:?}, value: {value:?} -> {value_genmc}"
         );
-        self.atomic_store_impl(alloc_id, address, size, value_genmc, ordering)
+        self.atomic_store_impl(machine, alloc_id, address, size, value_genmc, ordering)
     }
 
-    pub(crate) fn atomic_fence(&self) -> Result<(), ()> {
+    pub(crate) fn atomic_fence<'tcx>(&self, _machine: &MiriMachine<'tcx>) -> Result<(), ()> {
+        // TODO GENMC
+        eprintln!("MIRI: TODO GENMC: atomic_fence");
+        todo!()
+    }
+
+    pub(crate) fn atomic_rmw_op<'tcx>(&self, _machine: &MiriMachine<'tcx>) -> Result<(), ()> {
+        eprintln!("MIRI: TODO GENMC: atomic_rmw_op");
         // TODO GENMC
         todo!()
     }
 
-    pub(crate) fn atomic_rmw_op(&self) -> Result<(), ()> {
+    pub(crate) fn atomic_exchange<'tcx>(&self, _machine: &MiriMachine<'tcx>) -> Result<(), ()> {
+        eprintln!("MIRI: TODO GENMC: atomic_exchange");
         // TODO GENMC
         todo!()
     }
 
-    pub(crate) fn atomic_exchange(&self) -> Result<(), ()> {
+    pub(crate) fn atomic_compare_exchange<'tcx>(
+        &self,
+        _machine: &MiriMachine<'tcx>,
+        can_fail_spuriously: bool,
+    ) -> Result<(), ()> {
         // TODO GENMC
-        todo!()
-    }
-
-    pub(crate) fn atomic_compare_exchange(&self, can_fail_spuriously: bool) -> Result<(), ()> {
-        // TODO GENMC
+        eprintln!("MIRI: TODO GENMC: atomic_compare_exchange");
         dbg!(can_fail_spuriously);
         todo!()
     }
 
-    pub(crate) fn memory_load(
+    pub(crate) fn memory_load<'tcx>(
         &self,
+        machine: &MiriMachine<'tcx>,
         // ecx: TODO GENMC
         // Pointer
         alloc_id: AllocId,
@@ -209,14 +278,16 @@ impl GenmcCtx {
         size: usize,
     ) -> Result<(), ()> {
         eprintln!(
-            "MIRI: SKIP! received memory_load (non-atomic): {alloc_id:?}, address: {address}, size: {size}"
+            "MIRI: SKIP! received memory_load (non-atomic): {alloc_id:?}, address: {address}, size: {size}, thread_id: {:?}",
+            machine.threads.active_thread(),
         );
         Ok(())
         // self.atomic_load_impl(alloc_id, address, size, MemoryOrdering::NotAtomic)
     }
 
-    pub(crate) fn memory_store(
+    pub(crate) fn memory_store<'tcx>(
         &self,
+        _machine: &MiriMachine<'tcx>,
         alloc_id: AllocId,
         address: usize,
         size: usize,
@@ -235,8 +306,9 @@ impl GenmcCtx {
 
     /**** Memory (de)allocation ****/
 
-    pub(crate) fn handle_alloc(
+    pub(crate) fn handle_alloc<'tcx>(
         &self,
+        machine: &MiriMachine<'tcx>,
         alloc_id: AllocId,
         requested_address: usize,
         size: Size,
@@ -251,21 +323,24 @@ impl GenmcCtx {
         let alloc_id = alloc_id.0.get();
         // kind: MemoryKind, TODO GENMC: Does GenMC care about the kind of Memory?
         let size = size.bytes_usize();
-        
+
         if size == 0 {
             eprintln!("SKIP telling GenMC about ZST allocation");
             return Ok(());
         }
 
+        let curr_thread = machine.threads.active_thread().to_u32();
+
         let alignment = alignment.bytes_usize();
         let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
         let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
-        pinned_mc.handleMalloc(alloc_id, requested_address, size, alignment);
+        pinned_mc.handleMalloc(curr_thread, alloc_id, requested_address, size, alignment);
         Ok(())
     }
 
-    pub(crate) fn handle_dealloc(
+    pub(crate) fn handle_dealloc<'tcx>(
         &self,
+        machine: &MiriMachine<'tcx>,
         alloc_id: AllocId,
         size: Size,
         align: Align,
@@ -283,18 +358,50 @@ impl GenmcCtx {
             return Ok(());
         }
 
+        let curr_thread = machine.threads.active_thread().to_u32();
+
         let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
         let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
-        pinned_mc.handleFree(alloc_id, size);
+        pinned_mc.handleFree(curr_thread, alloc_id, size);
 
         Ok(())
     }
 
-    // pub(crate) fn handle_free(
+    /**** Thread management ****/
+
+    pub(crate) fn handle_thread_create<'tcx>(
+        &self,
+        machine: &MiriMachine<'tcx>,
+        new_thread_id: ThreadId,
+    ) -> Result<(), ()> {
+        let new_thread_id = new_thread_id.to_u32();
+        let parent_thread_id = machine.threads.active_thread().to_u32();
+
+        eprintln!(
+            "MIRI: handling thread creation (thread {parent_thread_id} spawned thread {new_thread_id})"
+        );
+
+        let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
+        let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
+
+        pinned_mc.handleThreadCreate(new_thread_id, parent_thread_id);
+
+        Ok(())
+    }
+
+    // pub(crate) fn handle_thread_join<'tcx>(&self, _machine: &MiriMachine<'tcx>) -> Result<(), ()> {
+    //     todo!();
+    // }
+
+    // pub(crate) fn handle_thread_finish<'tcx>(
     //     &self,
-    //     alloc_id: AllocId,
-    // ) {
-    //     // TODO GENMC: implement
+    //     _machine: &MiriMachine<'tcx>,
+    // ) -> Result<(), ()> {
+    //     todo!();
+    // }
+
+    // pub(crate) fn handle_thread_kill<'tcx>(&self, _machine: &MiriMachine<'tcx>) -> Result<(), ()> {
+    //     todo!();
     // }
 
     /**** Scheduling queries ****/
@@ -311,8 +418,9 @@ impl GenmcCtx {
 
 impl GenmcCtx {
     //* might fails if there's a race, load might also not read anything (returns None) */
-    fn atomic_load_impl(
+    fn atomic_load_impl<'tcx>(
         &self,
+        machine: &MiriMachine<'tcx>,
         alloc_id: AllocId,
         address: usize,
         size: usize,
@@ -326,15 +434,18 @@ impl GenmcCtx {
         eprintln!(
             "Calling into GenMC (load, alloc: {alloc_id:?}, address: {address}, size: {size}, {memory_ordering:?})"
         );
+        let curr_thread = machine.threads.active_thread().to_u32();
+
         let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
         let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
-        pinned_mc.handleLoad(alloc_id, address, size, memory_ordering);
+        pinned_mc.handleLoad(curr_thread, alloc_id, address, size, memory_ordering);
         // TODO GENMC
         Ok(())
     }
 
-    fn atomic_store_impl(
+    fn atomic_store_impl<'tcx>(
         &self,
+        machine: &MiriMachine<'tcx>,
         alloc_id: AllocId,
         address: usize,
         size: usize,
@@ -348,22 +459,24 @@ impl GenmcCtx {
         eprintln!(
             "Calling into GenMC (store, alloc: {alloc_id:?}, address: {address}, size: {size}, {memory_ordering:?})"
         );
+        let curr_thread = machine.threads.active_thread().to_u32();
+
         let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
         let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
-        pinned_mc.handleStore(alloc_id, address, size, value, memory_ordering);
+        pinned_mc.handleStore(curr_thread, alloc_id, address, size, value, memory_ordering);
         // TODO GENMC
         Ok(())
     }
 }
 
-impl Drop for GenmcCtx {
-    fn drop(&mut self) {
-        eprintln!("MIRI: attempting to get GenMC to print the Execution graph...");
-        let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
-        let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
-        pinned_mc.printGraph();
-    }
-}
+// impl Drop for GenmcCtx {
+//     fn drop(&mut self) {
+//         eprintln!("MIRI: attempting to get GenMC to print the Execution graph...");
+//         let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
+//         let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
+//         pinned_mc.printGraph();
+//     }
+// }
 
 impl std::fmt::Debug for GenmcCtx {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

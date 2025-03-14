@@ -875,6 +875,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         func_arg: ImmTy<'tcx>,
         ret_layout: TyAndLayout<'tcx>,
     ) -> InterpResult<'tcx, ThreadId> {
+        eprintln!("MIRI (TODO GENMC): start_regular_thread called!");
         let this = self.eval_context_mut();
 
         // Create the new thread
@@ -885,6 +886,9 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         let current_span = this.machine.current_span();
         if let Some(data_race) = &mut this.machine.data_race {
             data_race.thread_created(&this.machine.threads, new_thread_id, current_span);
+        }
+        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
+            genmc_ctx.handle_thread_create(&this.machine, new_thread_id).unwrap(); // TODO GENMC: proper error handling
         }
 
         // Write the current thread-id, switch to the next thread later

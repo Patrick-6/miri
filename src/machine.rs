@@ -6,6 +6,7 @@ use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::hash_map::Entry;
 use std::path::Path;
+use std::rc::Rc;
 use std::{fmt, process};
 
 use rand::rngs::StdRng;
@@ -616,11 +617,15 @@ pub struct MiriMachine<'tcx> {
 
     /// Context for GenMC
     /// TODO GENMC: document better
-    pub(crate) genmc_ctx: Option<GenmcCtx>,
+    pub(crate) genmc_ctx: Option<Rc<GenmcCtx>>,
 }
 
 impl<'tcx> MiriMachine<'tcx> {
-    pub(crate) fn new(config: &MiriConfig, layout_cx: LayoutCx<'tcx>) -> Self {
+    pub(crate) fn new(
+        config: &MiriConfig,
+        layout_cx: LayoutCx<'tcx>,
+        genmc_ctx: Option<Rc<GenmcCtx>>,
+    ) -> Self {
         let tcx = layout_cx.tcx();
         let local_crates = helpers::get_local_crates(tcx);
         let layouts =
@@ -678,7 +683,6 @@ impl<'tcx> MiriMachine<'tcx> {
             thread_cpu_affinity
                 .insert(threads.active_thread(), CpuAffinityMask::new(&layout_cx, config.num_cpus));
         }
-        let genmc_ctx = config.genmc_config.as_ref().map(GenmcCtx::new);
         MiriMachine {
             tcx,
             borrow_tracker,
@@ -1457,7 +1461,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             let size = range.size.bytes_usize();
 
             // let _read_value =
-            genmc_ctx.memory_load(alloc_id, address, size).unwrap(); // TODO GENMC proper error handling
+            genmc_ctx.memory_load(machine, alloc_id, address, size).unwrap(); // TODO GENMC proper error handling
         }
         interp_ok(())
     }
@@ -1488,7 +1492,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             // machine.alloc_addresses.borrow().addr_from_alloc_id(alloc_id,)
             let address = alloc_id.0.get().try_into().unwrap(); // TODO GENMC: what is the proper address here?
             let size = range.size.bytes_usize();
-            genmc_ctx.memory_store(alloc_id, address, size).unwrap(); // TODO GENMC proper error handling
+            genmc_ctx.memory_store(&machine, alloc_id, address, size).unwrap(); // TODO GENMC proper error handling
         }
         interp_ok(())
     }
@@ -1526,7 +1530,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
 
         // TODO GENMC: inform GenMC about the free
         if let Some(genmc_ctx) = &machine.genmc_ctx {
-            genmc_ctx.handle_dealloc(alloc_id, size, align, kind).unwrap();
+            genmc_ctx.handle_dealloc(&machine, alloc_id, size, align, kind).unwrap();
         }
 
         interp_ok(())
