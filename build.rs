@@ -83,7 +83,7 @@ fn main() {
     // println!("cargo:rerun-if-changed=genmc/src/Verification/MiriInterface.hpp");
     // Recursively walk the directory
 
-    let extensions = ["cpp", "cc", "hpp", "h", "c"].map(os_str::OsStr::new);
+    let extensions = ["cpp", "cc", "hpp", "h", "c", "am"].map(os_str::OsStr::new);
     for entry in WalkDir::new(GENMC_PATH).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
         if path.is_file() && path.extension().is_some_and(|ext| extensions.contains(&ext)) {

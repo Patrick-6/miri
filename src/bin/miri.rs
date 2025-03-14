@@ -181,6 +181,8 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
         }
 
         let genmc_ctx = config.genmc_config.as_ref().map(GenmcCtx::new).map(Rc::new);
+        // TODO GENMC: handle this:
+        assert!(!(self.many_seeds.is_some() && config.genmc_config.is_some()), "GenMC mode is incompatible with many seeds mode (currently(?))");
 
         if let Some(many_seeds) = self.many_seeds.take() {
             assert!(config.seed.is_none());
@@ -211,11 +213,23 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
         // } else if let Some(genmc_config) = config.genmc_config {
         //     todo!() // TODO GENMC: implement GenMC loop
         } else {
-            let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, config, genmc_ctx)
+            let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, config, genmc_ctx.clone())
                 .unwrap_or_else(|| {
                     tcx.dcx().abort_if_errors();
                     rustc_driver::EXIT_FAILURE
                 });
+
+            // TODO GENMC: is this the correct place to put this?
+            if let Some(genmc_ctx) = &genmc_ctx {
+
+                eprintln!(
+                    "Execution done, GenMC: is_halting: {}, is_moot: {}",
+                    genmc_ctx.is_halting(),
+                    genmc_ctx.is_moot()
+                );
+
+                genmc_ctx.print_genmc_graph();
+            }
             std::process::exit(return_code);
         }
 

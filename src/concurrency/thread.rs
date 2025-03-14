@@ -937,6 +937,12 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     /// This is called by the eval loop when a thread's on_stack_empty returns `Ready`.
     fn terminate_active_thread(&mut self, tls_alloc_action: TlsAllocAction) -> InterpResult<'tcx> {
         let this = self.eval_context_mut();
+
+        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
+            // TODO GENMC: check if this is the right place to call this:
+            genmc_ctx.handle_thread_finish(&this.machine).unwrap(); // TODO GENMC: proper error handling
+        }
+
         // Mark thread as terminated.
         let thread = this.active_thread_mut();
         assert!(thread.stack.is_empty(), "only threads with an empty stack can be terminated");
@@ -1059,6 +1065,12 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     fn join_thread(&mut self, joined_thread_id: ThreadId) -> InterpResult<'tcx> {
         let this = self.eval_context_mut();
         this.machine.threads.join_thread(joined_thread_id, this.machine.data_race.as_mut())?;
+
+        // TODO GENMC: should this happen here or before the Miri stuff?
+        // TODO GENMC: check join_thread vs join_thread_exclusive handling with GenMC
+        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
+            genmc_ctx.handle_thread_join(&this.machine, joined_thread_id).unwrap(); // TODO GENMC: proper error handling
+        }
         interp_ok(())
     }
 
@@ -1068,6 +1080,12 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         this.machine
             .threads
             .join_thread_exclusive(joined_thread_id, this.machine.data_race.as_mut())?;
+
+        // TODO GENMC: should this happen here or before the Miri stuff?
+        // TODO GENMC: check join_thread vs join_thread_exclusive handling with GenMC
+        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
+            genmc_ctx.handle_thread_join(&this.machine, joined_thread_id).unwrap(); // TODO GENMC: proper error handling
+        }
         interp_ok(())
     }
 

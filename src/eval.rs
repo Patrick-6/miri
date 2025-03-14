@@ -491,14 +491,6 @@ pub fn eval_entry<'tcx>(
     // TODO GENMC: is this the correct place to put this?
     if let Some(genmc_ctx) = &ecx.machine.genmc_ctx {
         genmc_ctx.handle_execution_end();
-
-        eprintln!(
-            "Execution done, GenMC: is_halting: {}, is_moot: {}",
-            genmc_ctx.is_halting(),
-            genmc_ctx.is_moot()
-        );
-
-        genmc_ctx.print_genmc_graph();
     }
 
     // Process the result.

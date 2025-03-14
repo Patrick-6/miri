@@ -77,8 +77,8 @@ mod ffi {
 
         // fn handleThreadKill(self: Pin<&mut MiriGenMCShim>, thread_id: u32, parent_id: u32);
         fn handleThreadCreate(self: Pin<&mut MiriGenMCShim>, thread_id: u32, parent_id: u32);
-        // fn handleThreadJoin(self: Pin<&mut MiriGenMCShim>, thread_id: u32, parent_id: u32);
-        // fn handleThreadFinish(self: Pin<&mut MiriGenMCShim>, thread_id: u32, parent_id: u32);
+        fn handleThreadJoin(self: Pin<&mut MiriGenMCShim>, thread_id: u32, child_id: u32);
+        fn handleThreadFinish(self: Pin<&mut MiriGenMCShim>, thread_id: u32, ret_val: u64);
 
         fn isHalting(self: &MiriGenMCShim) -> bool;
         fn isMoot(self: &MiriGenMCShim) -> bool;
@@ -389,16 +389,41 @@ impl GenmcCtx {
         Ok(())
     }
 
-    // pub(crate) fn handle_thread_join<'tcx>(&self, _machine: &MiriMachine<'tcx>) -> Result<(), ()> {
-    //     todo!();
-    // }
+    pub(crate) fn handle_thread_join<'tcx>(
+        &self,
+        machine: &MiriMachine<'tcx>,
+        child_thread_id: ThreadId,
+    ) -> Result<(), ()> {
+        let curr_thread_id = machine.threads.active_thread().to_u32();
+        let child_thread_id = child_thread_id.to_u32();
 
-    // pub(crate) fn handle_thread_finish<'tcx>(
-    //     &self,
-    //     _machine: &MiriMachine<'tcx>,
-    // ) -> Result<(), ()> {
-    //     todo!();
-    // }
+        eprintln!(
+            "MIRI: handling thread joining (thread {curr_thread_id} joining thread {child_thread_id})"
+        );
+
+        let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
+        let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
+
+        pinned_mc.handleThreadJoin(curr_thread_id, child_thread_id);
+
+        Ok(())
+    }
+
+    pub(crate) fn handle_thread_finish<'tcx>(&self, machine: &MiriMachine<'tcx>) -> Result<(), ()> {
+        let curr_thread_id = machine.threads.active_thread().to_u32();
+        let ret_val = 0; // TODO GENMC: do threads in Miri have a return value?
+
+        eprintln!(
+            "MIRI: handling thread finish (thread {curr_thread_id} returns with DUMMY value 0)"
+        );
+
+        let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
+        let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
+
+        pinned_mc.handleThreadFinish(curr_thread_id, ret_val);
+
+        Ok(())
+    }
 
     // pub(crate) fn handle_thread_kill<'tcx>(&self, _machine: &MiriMachine<'tcx>) -> Result<(), ()> {
     //     todo!();
