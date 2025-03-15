@@ -178,10 +178,6 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         let [] = check_intrinsic_arg_count(args)?;
         this.atomic_fence(atomic)?;
 
-        // Inform GenMC about the atomic fence.
-        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
-            genmc_ctx.atomic_fence(&this.machine).unwrap(); // TODO GENMC: proper error handling
-        }
         interp_ok(())
     }
 
@@ -224,7 +220,8 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         }
 
         // Inform GenMC about the atomic rmw operation.
-        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
+        // TODO GENMC: is this the correct place to put this?
+        if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
             genmc_ctx.atomic_rmw_op(&this.machine).unwrap(); // TODO GENMC: proper error handling
         }
         interp_ok(()) // TODO GENMC: is it ok to move the interp_ok call outside the match statement?
@@ -246,7 +243,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         this.write_scalar(old, dest)?; // old value is returned
 
         // Inform GenMC about the atomic atomic exchange.
-        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
+        if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
             genmc_ctx.atomic_exchange(&this.machine).unwrap(); // TODO GENMC: proper error handling
         }
 
@@ -281,7 +278,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         this.write_immediate(old, dest)?;
 
         // Inform GenMC about the atomic atomic compare exchange.
-        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
+        if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
             genmc_ctx.atomic_compare_exchange(&this.machine, can_fail_spuriously).unwrap(); // TODO GENMC: proper error handling
         }
 

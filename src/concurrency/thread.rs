@@ -15,7 +15,7 @@ use rustc_middle::mir::Mutability;
 use rustc_middle::ty::layout::TyAndLayout;
 use rustc_span::Span;
 
-use crate::concurrency::data_race;
+use crate::machine::ConcurrencyHandler;
 use crate::shims::tls;
 use crate::*;
 
@@ -580,11 +580,27 @@ impl<'tcx> ThreadManager<'tcx> {
     fn join_thread(
         &mut self,
         joined_thread_id: ThreadId,
-        data_race: Option<&mut data_race::GlobalState>,
+        concurrency_handler: &mut ConcurrencyHandler,
     ) -> InterpResult<'tcx> {
         if self.threads[joined_thread_id].join_status == ThreadJoinStatus::Detached {
             // On Windows this corresponds to joining on a closed handle.
             throw_ub_format!("trying to join a detached thread");
+        }
+
+        // fn handle_join(threads: &mut ThreadManager, concurrency_handler: &ConcurrencyHandler) {
+        fn handle_join(
+            threads: &mut ThreadManager<'_>,
+            joined_thread_id: ThreadId,
+            concurrency_handler: &mut ConcurrencyHandler,
+        ) {
+            match concurrency_handler {
+                ConcurrencyHandler::None => {}
+                ConcurrencyHandler::DataRace(data_race) =>
+                    data_race.thread_joined(threads, joined_thread_id),
+                ConcurrencyHandler::GenMC(genmc_ctx) => {
+                    genmc_ctx.handle_thread_join(threads.active_thread, joined_thread_id).unwrap(); // TODO GENMC: proper error handling
+                }
+            }
         }
 
         // Mark the joined thread as being joined so that we detect if other
@@ -606,18 +622,14 @@ impl<'tcx> ThreadManager<'tcx> {
                     }
                     |this, unblock: UnblockKind| {
                         assert_eq!(unblock, UnblockKind::Ready);
-                        if let Some(data_race) = &mut this.machine.data_race {
-                            data_race.thread_joined(&this.machine.threads, joined_thread_id);
-                        }
+                        handle_join(&mut this.machine.threads, joined_thread_id, &mut this.machine.concurrency_handler);
                         interp_ok(())
                     }
                 ),
             );
         } else {
             // The thread has already terminated - establish happens-before
-            if let Some(data_race) = data_race {
-                data_race.thread_joined(self, joined_thread_id);
-            }
+            handle_join(self, joined_thread_id, concurrency_handler);
         }
         interp_ok(())
     }
@@ -627,7 +639,7 @@ impl<'tcx> ThreadManager<'tcx> {
     fn join_thread_exclusive(
         &mut self,
         joined_thread_id: ThreadId,
-        data_race: Option<&mut data_race::GlobalState>,
+        concurrency_handler: &mut ConcurrencyHandler,
     ) -> InterpResult<'tcx> {
         if self.threads[joined_thread_id].join_status == ThreadJoinStatus::Joined {
             throw_ub_format!("trying to join an already joined thread");
@@ -645,7 +657,7 @@ impl<'tcx> ThreadManager<'tcx> {
             "this thread already has threads waiting for its termination"
         );
 
-        self.join_thread(joined_thread_id, data_race)
+        self.join_thread(joined_thread_id, concurrency_handler)
     }
 
     /// Set the name of the given thread.
@@ -884,13 +896,14 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             Box::new(move |m| state.on_stack_empty(m))
         });
         let current_span = this.machine.current_span();
-        if let Some(data_race) = &mut this.machine.data_race {
-            data_race.thread_created(&this.machine.threads, new_thread_id, current_span);
-        }
-        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
-            genmc_ctx.handle_thread_create(&this.machine, new_thread_id).unwrap(); // TODO GENMC: proper error handling
-        }
 
+        match &mut this.machine.concurrency_handler {
+            ConcurrencyHandler::None => {}
+            ConcurrencyHandler::DataRace(data_race) =>
+                data_race.thread_created(&this.machine.threads, new_thread_id, current_span),
+            ConcurrencyHandler::GenMC(genmc_ctx) =>
+                genmc_ctx.handle_thread_create(&this.machine.threads, new_thread_id).unwrap(), // TODO GENMC: proper error handling,
+        }
         // Write the current thread-id, switch to the next thread later
         // to treat this write operation as occurring on the current thread.
         if let Some(thread_info_place) = thread {
@@ -938,18 +951,18 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     fn terminate_active_thread(&mut self, tls_alloc_action: TlsAllocAction) -> InterpResult<'tcx> {
         let this = self.eval_context_mut();
 
-        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
-            // TODO GENMC: check if this is the right place to call this:
-            genmc_ctx.handle_thread_finish(&this.machine).unwrap(); // TODO GENMC: proper error handling
-        }
-
         // Mark thread as terminated.
         let thread = this.active_thread_mut();
         assert!(thread.stack.is_empty(), "only threads with an empty stack can be terminated");
         thread.state = ThreadState::Terminated;
-        if let Some(ref mut data_race) = this.machine.data_race {
-            data_race.thread_terminated(&this.machine.threads);
+        match &mut this.machine.concurrency_handler {
+            ConcurrencyHandler::None => {}
+            ConcurrencyHandler::DataRace(data_race) =>
+                data_race.thread_terminated(&this.machine.threads),
+            ConcurrencyHandler::GenMC(genmc_ctx) =>
+                genmc_ctx.handle_thread_finish(&this.machine.threads).unwrap(), // TODO GENMC: proper error handling
         }
+
         // Deallocate TLS.
         let gone_thread = this.active_thread();
         {
@@ -1064,13 +1077,10 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     #[inline]
     fn join_thread(&mut self, joined_thread_id: ThreadId) -> InterpResult<'tcx> {
         let this = self.eval_context_mut();
-        this.machine.threads.join_thread(joined_thread_id, this.machine.data_race.as_mut())?;
+        this.machine
+            .threads
+            .join_thread(joined_thread_id, &mut this.machine.concurrency_handler)?;
 
-        // TODO GENMC: should this happen here or before the Miri stuff?
-        // TODO GENMC: check join_thread vs join_thread_exclusive handling with GenMC
-        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
-            genmc_ctx.handle_thread_join(&this.machine, joined_thread_id).unwrap(); // TODO GENMC: proper error handling
-        }
         interp_ok(())
     }
 
@@ -1079,13 +1089,8 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         let this = self.eval_context_mut();
         this.machine
             .threads
-            .join_thread_exclusive(joined_thread_id, this.machine.data_race.as_mut())?;
+            .join_thread_exclusive(joined_thread_id, &mut this.machine.concurrency_handler)?;
 
-        // TODO GENMC: should this happen here or before the Miri stuff?
-        // TODO GENMC: check join_thread vs join_thread_exclusive handling with GenMC
-        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
-            genmc_ctx.handle_thread_join(&this.machine, joined_thread_id).unwrap(); // TODO GENMC: proper error handling
-        }
         interp_ok(())
     }
 

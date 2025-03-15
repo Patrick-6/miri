@@ -619,6 +619,7 @@ fn main() {
             // TODO GENMC: add to documentation
             // TODO GENMC: add more GenMC options
             miri_config.genmc_config = Some(Default::default());
+            miri_config.data_race_detector = true; // GenMC always does data race detection in GenMC mode
         } else if let Some(param) = arg.strip_prefix("-Zmiri-env-forward=") {
             miri_config.forwarded_env_vars.push(param.to_owned());
         } else if let Some(param) = arg.strip_prefix("-Zmiri-env-set=") {

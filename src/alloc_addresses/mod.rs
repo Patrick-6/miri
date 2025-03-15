@@ -246,10 +246,15 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
             }
         };
         eprintln!("addr_from_alloc_id_uncached: {alloc_id:?} --> {addr}");
+
+        // TODO GENMC: let GenMC choose the addresses (and document why this is done this way)
         // TODO GENMC: document why this is here (because address of allocation not known in `init_alloc_extra`)
-        if let Some(genmc_ctx) = &this.machine.genmc_ctx {
+        // TODO GENMC: `this` is not mutably borrowed here, so we can't mutably borrow the `concurrency_handler`, need to rethink this (maybe change the function signature)
+        if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
             let requested_address = addr.try_into().unwrap();
-            genmc_ctx.handle_alloc(&this.machine, alloc_id, requested_address, info.size, info.align).unwrap(); // TODO GENMC: proper error handling
+            genmc_ctx
+                .handle_alloc(&this.machine, alloc_id, requested_address, info.size, info.align)
+                .unwrap(); // TODO GENMC: proper error handling
         }
         interp_ok(addr)
     }
@@ -465,7 +470,8 @@ impl<'tcx> MiriMachine<'tcx> {
         // Also remember this address for future reuse.
         let thread = self.threads.active_thread();
         global_state.reuse.add_addr(rng, addr, size, align, kind, thread, || {
-            if let Some(data_race) = &self.data_race {
+            if let Some(data_race) = &self.concurrency_handler.as_data_race_ref() {
+                // TODO GENMC: does GenMC need to be informed about this?
                 data_race.release_clock(&self.threads, |clock| clock.clone())
             } else {
                 VClock::default()

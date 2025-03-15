@@ -489,7 +489,7 @@ pub fn eval_entry<'tcx>(
     }
 
     // TODO GENMC: is this the correct place to put this?
-    if let Some(genmc_ctx) = &ecx.machine.genmc_ctx {
+    if let Some(genmc_ctx) = ecx.machine.concurrency_handler.as_genmc_ref() {
         genmc_ctx.handle_execution_end();
     }
 

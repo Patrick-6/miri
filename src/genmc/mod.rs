@@ -7,7 +7,7 @@ use rustc_abi::{Align, Size};
 use rustc_middle::mir::interpret::AllocId;
 
 use self::ffi::{MemoryOrdering, MiriGenMCShim, createGenmcHandle};
-use crate::{AtomicReadOrd, AtomicWriteOrd, MemoryKind, MiriMachine, ThreadId};
+use crate::{AtomicReadOrd, AtomicWriteOrd, MemoryKind, MiriMachine, ThreadId, ThreadManager};
 
 mod cxx_extra;
 
@@ -371,11 +371,11 @@ impl GenmcCtx {
 
     pub(crate) fn handle_thread_create<'tcx>(
         &self,
-        machine: &MiriMachine<'tcx>,
+        threads: &ThreadManager<'tcx>,
         new_thread_id: ThreadId,
     ) -> Result<(), ()> {
         let new_thread_id = new_thread_id.to_u32();
-        let parent_thread_id = machine.threads.active_thread().to_u32();
+        let parent_thread_id = threads.active_thread().to_u32();
 
         eprintln!(
             "MIRI: handling thread creation (thread {parent_thread_id} spawned thread {new_thread_id})"
@@ -389,12 +389,15 @@ impl GenmcCtx {
         Ok(())
     }
 
-    pub(crate) fn handle_thread_join<'tcx>(
+    pub(crate) fn handle_thread_join(
         &self,
-        machine: &MiriMachine<'tcx>,
+        // machine: &MiriMachine<'tcx>,
+        // threads: &ThreadManager<'tcx>,
+        active_thread_id: ThreadId,
         child_thread_id: ThreadId,
     ) -> Result<(), ()> {
-        let curr_thread_id = machine.threads.active_thread().to_u32();
+        // let curr_thread_id = machine.threads.active_thread().to_u32();
+        let curr_thread_id = active_thread_id.to_u32();
         let child_thread_id = child_thread_id.to_u32();
 
         eprintln!(
@@ -409,8 +412,11 @@ impl GenmcCtx {
         Ok(())
     }
 
-    pub(crate) fn handle_thread_finish<'tcx>(&self, machine: &MiriMachine<'tcx>) -> Result<(), ()> {
-        let curr_thread_id = machine.threads.active_thread().to_u32();
+    pub(crate) fn handle_thread_finish<'tcx>(
+        &self,
+        threads: &ThreadManager<'tcx>,
+    ) -> Result<(), ()> {
+        let curr_thread_id = threads.active_thread().to_u32();
         let ret_val = 0; // TODO GENMC: do threads in Miri have a return value?
 
         eprintln!(
@@ -424,10 +430,6 @@ impl GenmcCtx {
 
         Ok(())
     }
-
-    // pub(crate) fn handle_thread_kill<'tcx>(&self, _machine: &MiriMachine<'tcx>) -> Result<(), ()> {
-    //     todo!();
-    // }
 
     /**** Scheduling queries ****/
 
