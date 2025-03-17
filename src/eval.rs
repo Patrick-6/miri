@@ -448,7 +448,7 @@ pub fn eval_entry<'tcx>(
     tcx: TyCtxt<'tcx>,
     entry_id: DefId,
     entry_type: MiriEntryFnType,
-    config: MiriConfig,
+    config: &MiriConfig,
     genmc_ctx: Option<Rc<GenmcCtx>>,
 ) -> Option<i32> {
     // Copy setting before we move `config`.
@@ -458,7 +458,7 @@ pub fn eval_entry<'tcx>(
         genmc_ctx.handle_execution_start();
     }
 
-    let mut ecx = match create_ecx(tcx, entry_id, entry_type, &config, genmc_ctx).report_err() {
+    let mut ecx = match create_ecx(tcx, entry_id, entry_type, config, genmc_ctx).report_err() {
         Ok(v) => v,
         Err(err) => {
             let (kind, backtrace) = err.into_parts();

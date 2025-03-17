@@ -65,10 +65,9 @@ mod ffi {
             self: Pin<&mut MiriGenMCShim>,
             thread_id: u32,
             alloc_id: u64,
-            requested_address: usize,
             size: usize,
             alignment: usize,
-        );
+        ) -> u64;
         fn handleFree(
             self: Pin<&mut MiriGenMCShim>,
             thread_id: u32,
@@ -287,6 +286,9 @@ impl GenmcCtx {
             "MIRI: SKIP! received memory_load (non-atomic): thread: {curr_thread}, {alloc_id:?}, address: {address}, size: {size}, thread_id: {:?}",
             machine.threads.active_thread(),
         );
+        if size == 0 {
+            eprintln!("MIRI: SKIP! skip telling GenMC about ZST access!");
+        }
         Ok(())
         // self.atomic_load_impl(alloc_id, address, size, MemoryOrdering::NotAtomic)
     }
@@ -303,6 +305,9 @@ impl GenmcCtx {
         eprintln!(
             "MIRI: SKIP! received memory_store (non-atomic): thread: {curr_thread}, {alloc_id:?}, address: {address}, size: {size}"
         );
+        if size == 0 {
+            eprintln!("MIRI: SKIP! skip telling GenMC about ZST access!");
+        }
         Ok(())
         // let value_genmc = scalar_to_genmc_scalar(value);
         // static VALUE_COUNT: AtomicU64 = AtomicU64::new(1);
@@ -317,31 +322,34 @@ impl GenmcCtx {
         &self,
         machine: &MiriMachine<'tcx>,
         alloc_id: AllocId,
-        requested_address: usize,
         size: Size,
         alignment: Align,
-    ) -> Result<(), ()> {
+    ) -> Result<u64, ()> {
         let curr_thread = machine.threads.active_thread().to_u32();
         eprintln!(
-            "MIRI: handle_alloc (thread: {curr_thread}, {alloc_id:?}, size: {size:?}, alignment: {alignment:?}, address: {requested_address})"
+            "MIRI: handle_alloc (thread: {curr_thread}, {alloc_id:?}, size: {size:?}, alignment: {alignment:?})"
         );
         // if size == 0 {
         //     eprintln!("MIRI: SKIP telling GenMC about alloc of size 0");
         // }
         let alloc_id = alloc_id.0.get();
         // kind: MemoryKind, TODO GENMC: Does GenMC care about the kind of Memory?
-        let size = size.bytes_usize();
+        let mut size = size.bytes_usize();
 
         if size == 0 {
-            eprintln!("SKIP telling GenMC about ZST allocation");
-            return Ok(());
+            // eprintln!("SKIP telling GenMC about ZST allocation");
+            eprintln!("Tell GenMC that ZST allocation actually is 1-byte allocation");
+
+            // return Ok(());
+            // return Err(());
+            size = 1;
         }
 
         let alignment = alignment.bytes_usize();
         let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
         let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
-        pinned_mc.handleMalloc(curr_thread, alloc_id, requested_address, size, alignment);
-        Ok(())
+        let chosen_address = pinned_mc.handleMalloc(curr_thread, alloc_id, size, alignment);
+        Ok(chosen_address)
     }
 
     pub(crate) fn handle_dealloc<'tcx>(
@@ -358,11 +366,19 @@ impl GenmcCtx {
         );
 
         let alloc_id = alloc_id.0.get();
-        let size = size.bytes_usize();
+        let mut size = size.bytes_usize();
 
+        // if size == 0 {
+        //     eprintln!("SKIP telling GenMC about ZST deallocation");
+        //     return Ok(());
+        // }
         if size == 0 {
-            eprintln!("SKIP telling GenMC about ZST deallocation");
-            return Ok(());
+            // eprintln!("SKIP telling GenMC about ZST allocation");
+            eprintln!("Tell GenMC that ZST deallocation actually is 1-byte deallocation");
+
+            // return Ok(());
+            // return Err(());
+            size = 1;
         }
 
         let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
@@ -477,6 +493,7 @@ impl GenmcCtx {
         // if size == 0 {
         //     eprintln!("MIRI: SKIP telling GenMC about read of size 0");
         // }
+        assert_ne!(0, size);
         let alloc_id = alloc_id.0.get();
         let curr_thread = machine.threads.active_thread().to_u32();
         eprintln!(
@@ -502,6 +519,7 @@ impl GenmcCtx {
         // if size == 0 {
         //     eprintln!("MIRI: SKIP telling GenMC about store of size 0");
         // }
+        assert_ne!(0, size);
         let alloc_id = alloc_id.0.get();
         let curr_thread = machine.threads.active_thread().to_u32();
         eprintln!(

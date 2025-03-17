@@ -182,7 +182,10 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
 
         let genmc_ctx = config.genmc_config.as_ref().map(GenmcCtx::new).map(Rc::new);
         // TODO GENMC: handle this:
-        assert!(!(self.many_seeds.is_some() && config.genmc_config.is_some()), "GenMC mode is incompatible with many seeds mode (currently(?))");
+        assert!(
+            !(self.many_seeds.is_some() && config.genmc_config.is_some()),
+            "GenMC mode is incompatible with many seeds mode (currently(?))"
+        );
 
         if let Some(many_seeds) = self.many_seeds.take() {
             assert!(config.seed.is_none());
@@ -192,7 +195,7 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
                 let mut config = config.clone();
                 config.seed = Some(seed.into());
                 eprintln!("Trying seed: {seed}");
-                let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, config, None)
+                let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, &config, None)
                     .unwrap_or(rustc_driver::EXIT_FAILURE);
                 if return_code != rustc_driver::EXIT_SUCCESS {
                     eprintln!("FAILING SEED: {seed}");
@@ -210,26 +213,52 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
                 eprintln!("{num_failed}/{total} SEEDS FAILED", total = many_seeds.seeds.count());
             }
             std::process::exit(exit_code.0.into_inner());
-        // } else if let Some(genmc_config) = config.genmc_config {
-        //     todo!() // TODO GENMC: implement GenMC loop
-        } else {
-            let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, config, genmc_ctx.clone())
+        } else if let Some(genmc_ctx) = genmc_ctx {
+            // TODO GENMC: implement GenMC loop
+            let max_reps = 8;
+
+            for rep in 0..max_reps {
+                eprintln!("MIRI: running GenMC loop {}/{max_reps}", rep + 1);
+                let return_code = miri::eval_entry(
+                    tcx,
+                    entry_def_id,
+                    entry_type,
+                    &config,
+                    Some(genmc_ctx.clone()),
+                )
                 .unwrap_or_else(|| {
                     tcx.dcx().abort_if_errors();
                     rustc_driver::EXIT_FAILURE
                 });
 
-            // TODO GENMC: is this the correct place to put this?
-            if let Some(genmc_ctx) = &genmc_ctx {
+                // TODO GENMC: is this the correct place to put this?
 
+                let is_halting = genmc_ctx.is_halting();
+                let is_moot = genmc_ctx.is_moot();
                 eprintln!(
-                    "Execution done, GenMC: is_halting: {}, is_moot: {}",
-                    genmc_ctx.is_halting(),
-                    genmc_ctx.is_moot()
+                    "Execution done (return code: {return_code}), GenMC: is_halting: {is_halting}, is_moot: {is_moot}",
                 );
 
                 genmc_ctx.print_genmc_graph();
+
+                if is_halting {
+                    eprintln!(
+                        "SUCCESS! Miri finished all interleavings (after rep {}/{max_reps})!",
+                        rep + 1
+                    );
+
+                    std::process::exit(return_code);
+                }
             }
+            eprintln!("ERROR: Miri could not explore all interleavings in {max_reps} repetitions!");
+            std::process::exit(1);
+        } else {
+            let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, &config, None)
+                .unwrap_or_else(|| {
+                    tcx.dcx().abort_if_errors();
+                    rustc_driver::EXIT_FAILURE
+                });
+
             std::process::exit(return_code);
         }
 

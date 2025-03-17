@@ -28,7 +28,11 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
 
     let flag = FLAG.load(SeqCst);
     assert!(flag == 1 || flag == 2);
-    0
+    if flag == 1 {
+        return 0;
+    } else {
+        return 1;
+    }
 }
 
 extern "C" fn thread_func(_value: *mut c_void) -> *mut c_void {
