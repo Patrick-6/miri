@@ -15,6 +15,9 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
     let attr: *const pthread_attr_t = std::ptr::null();
     let value: *mut c_void = std::ptr::null_mut();
 
+    // FLAG.store(42, SeqCst); // TODO GENMC:  HACK
+    unsafe { FLAG.as_ptr().write(42) }; // TODO GENMC:  HACK
+
     let ret_create = unsafe { libc::pthread_create(&raw mut thread_id, attr, thread_func, value) };
     assert!(ret_create == 0);
 
@@ -29,6 +32,6 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
 }
 
 extern "C" fn thread_func(_value: *mut c_void) -> *mut c_void {
-    FLAG.store(1, SeqCst);
+    FLAG.store(2, SeqCst);
     std::ptr::null_mut()
 }

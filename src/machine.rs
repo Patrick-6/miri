@@ -1716,11 +1716,6 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             ecx.run_provenance_gc();
         }
 
-        // TODO GENMC: ask GenMC which thread should be executed next (maybe always preempt here and then ask if it should be re-scheduled)
-        if let Some(genmc_ctx) = ecx.machine.concurrency_handler.as_genmc_ref() {
-            assert!(!genmc_ctx.should_preempt(), "unimplemented: preemption triggered by GenMC");
-        }
-
         // These are our preemption points.
         // (This will only take effect after the terminator has been executed.)
         ecx.maybe_preempt_active_thread();

@@ -112,7 +112,8 @@ pub enum BlockReason {
 }
 
 /// The state of a thread.
-enum ThreadState<'tcx> {
+// TODO GENMC: is this ok to be pub?
+pub enum ThreadState<'tcx> {
     /// The thread is enabled and can be executed.
     Enabled,
     /// The thread is blocked on something.
@@ -134,15 +135,16 @@ impl<'tcx> std::fmt::Debug for ThreadState<'tcx> {
 }
 
 impl<'tcx> ThreadState<'tcx> {
-    fn is_enabled(&self) -> bool {
+    // TODO GENMC: is it ok if these are pub?
+    pub fn is_enabled(&self) -> bool {
         matches!(self, ThreadState::Enabled)
     }
 
-    fn is_terminated(&self) -> bool {
+    pub fn is_terminated(&self) -> bool {
         matches!(self, ThreadState::Terminated)
     }
 
-    fn is_blocked_on(&self, reason: BlockReason) -> bool {
+    pub fn is_blocked_on(&self, reason: BlockReason) -> bool {
         matches!(*self, ThreadState::Blocked { reason: actual_reason, .. } if actual_reason == reason)
     }
 }
@@ -206,6 +208,11 @@ impl<'tcx> Thread<'tcx> {
     /// Get the name of the current thread if it was set.
     fn thread_name(&self) -> Option<&[u8]> {
         self.thread_name.as_deref()
+    }
+
+    pub fn get_state(&self) -> &ThreadState<'tcx> {
+        // TODO GENMC: should this implementation detail be exposed?
+        &self.state
     }
 
     /// Get the name of the current thread for display purposes; will include thread ID if not set.
@@ -339,8 +346,9 @@ impl VisitProvenance for Frame<'_, Provenance, FrameExtra<'_>> {
 }
 
 /// The moment in time when a blocked thread should be woken up.
+// TODO GENMC: is this ok to be pub?
 #[derive(Debug)]
-enum Timeout {
+pub enum Timeout {
     Monotonic(Instant),
     RealTime(SystemTime),
 }
@@ -514,9 +522,19 @@ impl<'tcx> ThreadManager<'tcx> {
         self.active_thread
     }
 
+    pub fn threads_ref(&self) -> &IndexVec<ThreadId, Thread<'tcx>> {
+        // TODO GENMC: should this implementation detail be exposed?
+        &self.threads
+    }
+
     /// Get the total number of threads that were ever spawn by this program.
     pub fn get_total_thread_count(&self) -> usize {
         self.threads.len()
+    }
+
+    /// Get the total of threads that are currently enabled, i.e., could continue executing.
+    pub fn get_enabled_thread_count(&self) -> usize {
+        self.threads.iter().filter(|t| t.state.is_enabled()).count()
     }
 
     /// Get the total of threads that are currently live, i.e., not yet terminated.
@@ -714,7 +732,11 @@ impl<'tcx> ThreadManager<'tcx> {
     /// used in stateless model checkers such as Loom: run the active thread as
     /// long as we can and switch only when we have to (the active thread was
     /// blocked, terminated, or has explicitly asked to be preempted).
-    fn schedule(&mut self, clock: &Clock) -> InterpResult<'tcx, SchedulingAction> {
+    fn schedule(
+        &mut self,
+        clock: &Clock,
+        concurrency_handler: &ConcurrencyHandler,
+    ) -> InterpResult<'tcx, SchedulingAction> {
         // This thread and the program can keep going.
         if self.threads[self.active_thread].state.is_enabled() && !self.yield_active_thread {
             // The currently active thread is still enabled, just continue with it.
@@ -739,23 +761,36 @@ impl<'tcx> ThreadManager<'tcx> {
         // the active thread. Then after that we look at `take(N)`, i.e., the threads *before* the
         // active thread.
         //
-        // TODO GENMC: in GenMC mode, ask GenMC for the next thread to schedule
-        // TODO GENMC: should this be affected by the seed given to Miri? (e.g., choose random unblocked thread, potentially including scheduling the same thread again after a yield)
-        let threads = self
-            .threads
-            .iter_enumerated()
-            .skip(self.active_thread.index() + 1)
-            .chain(self.threads.iter_enumerated().take(self.active_thread.index()));
-        for (id, thread) in threads {
-            debug_assert_ne!(self.active_thread, id);
-            if thread.state.is_enabled() {
-                info!(
-                    "---------- Now executing on thread `{}` (previous: `{}`) ----------------------------------------",
-                    self.get_thread_display_name(id),
-                    self.get_thread_display_name(self.active_thread)
-                );
-                self.active_thread = id;
-                break;
+
+        if let Some(genmc_ctx) = concurrency_handler.as_genmc_ref() {
+            let active_threads_count =
+                self.threads.iter().filter(|thread| thread.state.is_enabled()).count();
+            eprintln!(
+                "TODO GENMC: thread::schedule called: need to inform GenMC, ask for next thread to schedule (active thread {}, active threads: {active_threads_count}, total threads: {})",
+                self.active_thread.index(),
+                self.threads.len()
+            );
+            let next_thread_id = genmc_ctx.schedule_thread(self).unwrap(); // TODO GENMC
+            self.active_thread = next_thread_id;
+        } else {
+            // TODO GENMC: in GenMC mode, ask GenMC for the next thread to schedule
+            // TODO GENMC: should this be affected by the seed given to Miri? (e.g., choose random unblocked thread, potentially including scheduling the same thread again after a yield)
+            let threads = self
+                .threads
+                .iter_enumerated()
+                .skip(self.active_thread.index() + 1)
+                .chain(self.threads.iter_enumerated().take(self.active_thread.index()));
+            for (id, thread) in threads {
+                debug_assert_ne!(self.active_thread, id);
+                if thread.state.is_enabled() {
+                    info!(
+                        "---------- Now executing on thread `{}` (previous: `{}`) ----------------------------------------",
+                        self.get_thread_display_name(id),
+                        self.get_thread_display_name(self.active_thread)
+                    );
+                    self.active_thread = id;
+                    break;
+                }
             }
         }
         self.yield_active_thread = false;
@@ -1168,7 +1203,18 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         use rand::Rng as _;
 
         let this = self.eval_context_mut();
-        if this.machine.rng.get_mut().random_bool(this.machine.preemption_rate) {
+
+        // TODO GENMC: ask GenMC which thread should be executed next (maybe always preempt here and then ask if it should be re-scheduled)
+        if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
+            // assert!(!genmc_ctx.should_preempt(), "unimplemented: preemption triggered by GenMC");
+            eprintln!(
+                "TODO GENMC: machine::before_terminator: asking GenMC if we should preempt the current thread."
+            );
+            if genmc_ctx.should_preempt() {
+                let this = this.eval_context_mut();
+                this.yield_active_thread();
+            }
+        } else if this.machine.rng.get_mut().random_bool(this.machine.preemption_rate) {
             this.yield_active_thread();
         }
     }
@@ -1182,7 +1228,11 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 this.machine.handle_abnormal_termination();
                 std::process::exit(1);
             }
-            match this.machine.threads.schedule(&this.machine.clock)? {
+            match this
+                .machine
+                .threads
+                .schedule(&this.machine.clock, &this.machine.concurrency_handler)?
+            {
                 SchedulingAction::ExecuteStep => {
                     if !this.step()? {
                         // See if this thread can do something else.
