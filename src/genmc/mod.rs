@@ -83,6 +83,8 @@ mod ffi {
 
         fn isHalting(self: &MiriGenMCShim) -> bool;
         fn isMoot(self: &MiriGenMCShim) -> bool;
+        fn isExplorationDone(self: Pin<&mut MiriGenMCShim>) -> bool;
+
         fn printGraph(self: Pin<&mut MiriGenMCShim>);
     }
 }
@@ -190,6 +192,12 @@ impl GenmcCtx {
         let mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
         let mc = mc_lock.as_ref().expect("model checker should not be null");
         mc.isMoot()
+    }
+
+    pub fn is_exploration_done(&self) -> bool {
+        let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
+        let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
+        pinned_mc.isExplorationDone()
     }
 
     /**** Memory access handling ****/

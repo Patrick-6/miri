@@ -235,13 +235,14 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
 
                 let is_halting = genmc_ctx.is_halting();
                 let is_moot = genmc_ctx.is_moot();
+                let is_exploration_done = genmc_ctx.is_exploration_done();
                 eprintln!(
-                    "Execution done (return code: {return_code}), GenMC: is_halting: {is_halting}, is_moot: {is_moot}",
+                    "Execution done (return code: {return_code}), GenMC: is_halting: {is_halting}, is_moot: {is_moot}, is_exploration_done: {is_exploration_done}",
                 );
 
                 genmc_ctx.print_genmc_graph();
 
-                if is_halting {
+                if is_exploration_done {
                     eprintln!(
                         "SUCCESS! Miri finished all interleavings (after rep {}/{max_reps})!",
                         rep + 1

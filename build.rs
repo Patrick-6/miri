@@ -30,6 +30,17 @@ fn main() {
     // assert!(Command::new("cxxbridge").arg("src/genmc/mod.rs").arg("--header").status().expect("failed to run command").success(), "cxxbridge failed!");
     // assert!(Command::new("cxxbridge").arg("src/genmc/mod.rs").status().expect("failed to run command").success(), "cxxbridge failed!");
 
+    // let cpp_flags = None;
+
+    // let opt_level = 0;
+    let opt_level = 2;
+
+    let debug_flags = "";
+    // let debug_flags = "-D_GLIBCXX_DEBUG"; // TODO: this causes issue, code compiled with CXX is incompatible with other code
+    let cpp_flags = Some(format!("-O{opt_level} -g {debug_flags}"));
+    let autotools_cpp_flags = cpp_flags.clone().map(|flags| format!("CXXFLAGS={flags}"));
+    let autotools_c_flags = cpp_flags.map(|flags| format!("CFLAGS={flags}"));
+
     // println!("cargo::warning=Old working directory': {:?}'", std::env::current_dir().unwrap());
     std::env::set_current_dir("./genmc").unwrap();
     println!("cargo::warning=New working directory': {:?}'", std::env::current_dir().unwrap());
@@ -42,8 +53,13 @@ fn main() {
             .success(),
         "autoreconf failed!"
     );
+    // assert!(
+    //     Command::new("./configure").status().expect("failed to run command").success(),
+    //     "./configure failed!"
+    // );
+    let args = [autotools_c_flags, autotools_cpp_flags].into_iter().flatten();
     assert!(
-        Command::new("./configure").status().expect("failed to run command").success(),
+        Command::new("./configure").args(args).status().expect("failed to run command").success(),
         "./configure failed!"
     );
     assert!(
@@ -53,16 +69,20 @@ fn main() {
     std::env::set_current_dir("../").unwrap();
 
     cxx_build::bridge("src/genmc/mod.rs")
-        .cpp(true)
+        .compiler("g++") // TODO GENMC: make sure GenMC uses the same compiler as the cxx_bridge
+        .opt_level(opt_level)
+        .debug(true)
         .warnings(false) // TODO GENMC: try to fix some of those warnings
         .std("c++20")
+        .flag("-fno-exceptions")
+        .flag("-lffi")
+        .flag("-ldl")
+        .flag("-lLLVM-19")
+        // .flag(debug_flags) // TODO GENMC: make this work somehow
         .include("./genmc")
         // .include("./genmc/include") // For GenMC tests, DO NOT INCLUDE!!
         .include("./genmc/src")
         .include(LLVM_PATH)
-        .flag("-lffi")
-        .flag("-ldl")
-        .flag("-lLLVM-19")
         .file("./genmc/src/Verification/MiriInterface.hpp")
         .compile("genmc_interop");
 

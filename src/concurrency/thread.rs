@@ -1211,7 +1211,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 "TODO GENMC: machine::before_terminator: asking GenMC if we should preempt the current thread."
             );
             if genmc_ctx.should_preempt() {
-                let this = this.eval_context_mut();
                 this.yield_active_thread();
             }
         } else if this.machine.rng.get_mut().random_bool(this.machine.preemption_rate) {
