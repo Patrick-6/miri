@@ -28,6 +28,12 @@ mod ffi {
         SequentiallyConsistent = 7,
     }
 
+    extern "Rust" {
+        type Threads;
+        fn is_enabled(self: &Threads, thread_id: u32) -> bool;
+        // fn set_next_thread(self: &mut Threads, thread_id: u32);
+    }
+
     unsafe extern "C++" {
         include!("miri/genmc/src/Verification/MiriInterface.hpp");
 
@@ -81,6 +87,7 @@ mod ffi {
         fn handleThreadJoin(self: Pin<&mut MiriGenMCShim>, thread_id: u32, child_id: u32);
         fn handleThreadFinish(self: Pin<&mut MiriGenMCShim>, thread_id: u32, ret_val: u64);
 
+        fn scheduleNext(self: Pin<&mut MiriGenMCShim>, threads: &mut Threads) -> bool;
         fn isHalting(self: &MiriGenMCShim) -> bool;
         fn isMoot(self: &MiriGenMCShim) -> bool;
         fn isExplorationDone(self: Pin<&mut MiriGenMCShim>) -> bool;
@@ -88,6 +95,33 @@ mod ffi {
         fn printGraph(self: Pin<&mut MiriGenMCShim>);
     }
 }
+
+#[derive(Debug)]
+pub struct Threads {
+    // TODO
+}
+
+#[allow(unused)] // TODO GENMC: remove
+impl Threads {
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    fn is_enabled(&self, thread_id: u32) -> bool {
+        eprintln!("Threads::is_enabled({thread_id})");
+        true
+    }
+
+    fn set_next_thread(&mut self, thread_id: u32) {
+        eprintln!("Threads::set_next_thread({thread_id})");
+    }
+}
+
+// #[allow(non_snake_case)]
+// fn isEnabled(threads: &Threads, thread_id: u32) -> bool {
+//     threads.is_enabled(thread_id)
+// }
+
 
 trait ToGenmcMemoryOrdering {
     fn convert(self) -> MemoryOrdering;
@@ -472,6 +506,16 @@ impl GenmcCtx {
     ) -> Result<ThreadId, ()> {
         // TODO GENMC
         eprintln!("TODO GENMC: ask who to schedule next");
+
+        // let mut threads = Threads::new();
+
+        // let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
+        // let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
+
+        // eprintln!("TODO GENMC: call GenMC here, ask for scheduling");
+        // pinned_mc.scheduleNext(&mut threads);
+
+
         let enabled_thread_count = thread_manager.get_enabled_thread_count();
         let mut i = self.rng.lock().unwrap().random_range(0..enabled_thread_count);
         for (thread_id, thread) in thread_manager.threads_ref().iter_enumerated() {
