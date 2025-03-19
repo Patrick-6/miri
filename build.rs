@@ -1,17 +1,22 @@
 use std::ffi::os_str;
+// use autotools;
+// use autotools::Config;
+use std::process::Command;
 
 use walkdir::WalkDir;
 
 fn main() {
-    // use autotools;
     // Build the project in the path `foo` and installs it in `$OUT_DIR`
     // let dst = autotools::build("genmc");
-    // use autotools::Config;
-    use std::process::Command;
 
     const GENMC_PATH: &str = "./genmc";
-    const GENMC_MIRI_BUILD_PATH: &str = "./target/genmc_interop/";
+    const GENMC_MIRI_BUILD_PATH: &str = "./target/genmc_interop/"; // TODO GENMC: not needed?
     const LLVM_PATH: &str = "/usr/lib/llvm-19/lib";
+
+    const CXX_BRIDGE_INCLUDE_PATH: &str = "/root/miri/target/cxxbridge";
+    const WORKSPACE_INCLUDE_PATH: &str = "/root/";
+
+    // cxx_build::CFG.include_prefix = "";
 
     // let dst = Config::new("./genmc")
     //     .reconf("--install")
@@ -37,9 +42,27 @@ fn main() {
 
     let debug_flags = "";
     // let debug_flags = "-D_GLIBCXX_DEBUG"; // TODO: this causes issue, code compiled with CXX is incompatible with other code
-    let cpp_flags = Some(format!("-O{opt_level} -g {debug_flags}"));
+    let cpp_flags = Some(format!("-O{opt_level} -g {debug_flags} -I {WORKSPACE_INCLUDE_PATH} -I {CXX_BRIDGE_INCLUDE_PATH}"));
     let autotools_cpp_flags = cpp_flags.clone().map(|flags| format!("CXXFLAGS={flags}"));
     let autotools_c_flags = cpp_flags.map(|flags| format!("CFLAGS={flags}"));
+
+    cxx_build::bridge("src/genmc/mod.rs")
+        .compiler("g++") // TODO GENMC: make sure GenMC uses the same compiler as the cxx_bridge
+        .opt_level(opt_level)
+        .debug(true)
+        .warnings(false) // TODO GENMC: try to fix some of those warnings
+        .std("c++20")
+        .flag("-fno-exceptions")
+        .flag("-lffi")
+        .flag("-ldl")
+        .flag("-lLLVM-19")
+        // .flag(debug_flags) // TODO GENMC: make this work somehow
+        .include("./genmc")
+        // .include("./genmc/include") // For GenMC tests, DO NOT INCLUDE!!
+        .include("./genmc/src")
+        .include(LLVM_PATH)
+        .file("./genmc/src/Verification/MiriInterface.hpp")
+        .compile("genmc_interop");
 
     // println!("cargo::warning=Old working directory': {:?}'", std::env::current_dir().unwrap());
     std::env::set_current_dir("./genmc").unwrap();
@@ -67,24 +90,6 @@ fn main() {
         "make failed!"
     );
     std::env::set_current_dir("../").unwrap();
-
-    cxx_build::bridge("src/genmc/mod.rs")
-        .compiler("g++") // TODO GENMC: make sure GenMC uses the same compiler as the cxx_bridge
-        .opt_level(opt_level)
-        .debug(true)
-        .warnings(false) // TODO GENMC: try to fix some of those warnings
-        .std("c++20")
-        .flag("-fno-exceptions")
-        .flag("-lffi")
-        .flag("-ldl")
-        .flag("-lLLVM-19")
-        // .flag(debug_flags) // TODO GENMC: make this work somehow
-        .include("./genmc")
-        // .include("./genmc/include") // For GenMC tests, DO NOT INCLUDE!!
-        .include("./genmc/src")
-        .include(LLVM_PATH)
-        .file("./genmc/src/Verification/MiriInterface.hpp")
-        .compile("genmc_interop");
 
     // Simply link the library without using pkg-config
     // println!("cargo:rustc-link-search=native={}", dst.display());
