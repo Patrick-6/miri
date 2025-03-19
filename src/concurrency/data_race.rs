@@ -698,18 +698,11 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         // the *value* (including the associated provenance if this is an AtomicPtr) at this location.
         // Only metadata on the location itself is used.
 
-        // TODO GENMC: this may need to be replaced, and the value should be requested from GenMC instead:
-        let scalar = this.allow_data_races_ref(move |this| this.read_scalar(place))?;
-        let buffered_scalar = this.buffered_atomic_read(place, atomic, scalar, || {
-            this.validate_atomic_load(place, atomic)
-        })?;
-        let value = buffered_scalar.ok_or_else(|| err_ub!(InvalidUninitBytes(None)))?;
-
         // Inform GenMC about the atomic load.
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
             // TODO GENMC: find a better way to get the alloc_id
             let ptr = place.ptr();
-            let address = ptr.addr().bytes_usize();
+            let address = ptr.addr().bytes_usize(); // TODO GENMC: 64-bit pointers on 32-bit systems
             let size = place.layout.size.bytes().try_into().unwrap();
             // let alloc_id = this.ptr_get_alloc(ptr, size).unwrap();
 
@@ -718,10 +711,19 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
             let (alloc_id, _) = this.ptr_get_alloc(ptr, size).unwrap();
 
             let size = place.layout.size.bytes_usize();
-            genmc_ctx.atomic_load(&this.machine, alloc_id, address, size, atomic).unwrap(); // TODO GENMC proper error handling
-        }
+            let value =
+                genmc_ctx.atomic_load(&this.machine, alloc_id, address, size, atomic).unwrap(); // TODO GENMC proper error handling
+            interp_ok(value)
+        } else {
+            // TODO GENMC: this may need to be replaced, and the value should be requested from GenMC instead:
+            let scalar = this.allow_data_races_ref(move |this| this.read_scalar(place))?;
+            let buffered_scalar = this.buffered_atomic_read(place, atomic, scalar, || {
+                this.validate_atomic_load(place, atomic)
+            })?;
+            let value = buffered_scalar.ok_or_else(|| err_ub!(InvalidUninitBytes(None)))?;
 
-        interp_ok(value)
+            interp_ok(value)
+        }
     }
 
     /// Perform an atomic write operation at the memory location.
@@ -1416,7 +1418,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         let align = Align::from_bytes(place.layout.size.bytes()).unwrap();
         this.check_ptr_align(place.ptr(), align)?;
         // Ensure the allocation is mutable. Even failing (read-only) compare_exchange need mutable
-        // memory on many targets (i.e., they segfault if taht memory is mapped read-only), and
+        // memory on many targets (i.e., they segfault if that memory is mapped read-only), and
         // atomic loads can be implemented via compare_exchange on some targets. There could
         // possibly be some very specific exceptions to this, see
         // <https://github.com/rust-lang/miri/pull/2464#discussion_r939636130> for details.

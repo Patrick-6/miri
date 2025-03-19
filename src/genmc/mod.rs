@@ -6,7 +6,7 @@ use cxx::UniquePtr;
 use rand::prelude::*;
 use rand::rngs::StdRng;
 use rustc_abi::{Align, Size};
-use rustc_middle::mir::interpret::AllocId;
+use rustc_middle::{mir::interpret::AllocId, ty::ScalarInt};
 
 use self::ffi::{MemoryOrdering, MiriGenMCShim, createGenmcHandle};
 use crate::{AtomicReadOrd, AtomicWriteOrd, MemoryKind, MiriMachine, ThreadId, ThreadManager};
@@ -55,7 +55,7 @@ mod ffi {
             address: usize,
             size: usize,
             memory_ordering: MemoryOrdering,
-        );
+        ) -> u64; // TODO GENMC: modify this to allow for handling pointers and u128
         fn handleStore(
             self: Pin<&mut MiriGenMCShim>,
             thread_id: u32,
@@ -99,6 +99,7 @@ mod ffi {
 #[derive(Debug)]
 pub struct Threads {
     // TODO
+    // inner: &ThreadManager
 }
 
 #[allow(unused)] // TODO GENMC: remove
@@ -186,8 +187,8 @@ pub struct GenmcCtx {
 fn scalar_to_genmc_scalar(value: crate::Scalar) -> u64 {
     // TODO: proper handling of `Scalar`
     match value {
-        rustc_const_eval::interpret::Scalar::Int(scalar_int) => scalar_int.to_u64(),
-        rustc_const_eval::interpret::Scalar::Ptr(pointer, _) => pointer.into_parts().1.bytes(),
+        rustc_const_eval::interpret::Scalar::Int(scalar_int) => scalar_int.to_uint(scalar_int.size()).try_into().unwrap(), // TODO GENMC: doesn't work for size != 8
+        rustc_const_eval::interpret::Scalar::Ptr(_pointer, _size) => todo!(), // pointer.into_parts().1.bytes(),
     }
 }
 
@@ -261,7 +262,7 @@ impl GenmcCtx {
         address: usize,
         size: usize,
         ordering: AtomicReadOrd,
-    ) -> Result<(), ()> {
+    ) -> Result<crate::Scalar, ()> {
         let ordering = ordering.convert();
         eprintln!("MIRI: atomic_load with ordering {ordering:?}");
         self.atomic_load_impl(machine, alloc_id, address, size, ordering)
@@ -401,7 +402,7 @@ impl GenmcCtx {
         size: Size,
         align: Align,
         kind: MemoryKind,
-    ) -> Result<(), ()> {
+    ) -> Result<(), ()> { // TODO GENMC: interp_result
         let curr_thread = machine.threads.active_thread().to_u32();
         eprintln!(
             "TODO GENMC: inform GenMC about memory deallocation (thread: {curr_thread}, {alloc_id:?}, size: {size:?}, align: {align:?}, memory_kind: {kind:?}"
@@ -507,13 +508,13 @@ impl GenmcCtx {
         // TODO GENMC
         eprintln!("TODO GENMC: ask who to schedule next");
 
-        // let mut threads = Threads::new();
+        let mut threads = Threads::new();
 
-        // let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
-        // let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
+        let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
+        let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
 
-        // eprintln!("TODO GENMC: call GenMC here, ask for scheduling");
-        // pinned_mc.scheduleNext(&mut threads);
+        eprintln!("TODO GENMC: call GenMC here, ask for scheduling");
+        pinned_mc.scheduleNext(&mut threads);
 
 
         let enabled_thread_count = thread_manager.get_enabled_thread_count();
@@ -541,7 +542,7 @@ impl GenmcCtx {
         address: usize,
         size: usize,
         memory_ordering: MemoryOrdering,
-    ) -> Result<(), ()> {
+    ) -> Result<crate::Scalar, ()> {
         // if size == 0 {
         //     eprintln!("MIRI: SKIP telling GenMC about read of size 0");
         // }
@@ -554,9 +555,12 @@ impl GenmcCtx {
 
         let mut mc_lock = self.handle.lock().expect("Mutex should not be poisoned");
         let pinned_mc = mc_lock.as_mut().expect("model checker should not be null");
-        pinned_mc.handleLoad(curr_thread, alloc_id, address, size, memory_ordering);
-        // TODO GENMC
-        Ok(())
+        let read_value = pinned_mc.handleLoad(curr_thread, alloc_id, address, size, memory_ordering);
+        let size = Size::from_bytes(size);
+        let scalar_int = ScalarInt::try_from_uint(read_value, size).unwrap();
+        let read_scalar = crate::Scalar::Int(scalar_int);
+
+        Ok(read_scalar)
     }
 
     fn atomic_store_impl<'tcx>(
