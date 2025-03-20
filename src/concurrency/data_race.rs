@@ -700,19 +700,9 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
 
         // Inform GenMC about the atomic load.
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-            // TODO GENMC: find a better way to get the alloc_id
-            let ptr = place.ptr();
-            let address = ptr.addr().bytes_usize(); // TODO GENMC: 64-bit pointers on 32-bit systems
-            let size = place.layout.size.bytes().try_into().unwrap();
-            // let alloc_id = this.ptr_get_alloc(ptr, size).unwrap();
-
-            let ptr: interpret::Pointer<Provenance> =
-                interpret::Pointer::new(ptr.provenance.unwrap(), ptr.addr());
-            let (alloc_id, _) = this.ptr_get_alloc(ptr, size).unwrap();
-
-            let size = place.layout.size.bytes_usize();
-            let value =
-                genmc_ctx.atomic_load(&this.machine, alloc_id, address, size, atomic).unwrap(); // TODO GENMC proper error handling
+            let address =  place.ptr().addr();
+            let size = place.layout.size;
+            let value = genmc_ctx.atomic_load(&this.machine, address, size, atomic).unwrap(); // TODO GENMC proper error handling
             interp_ok(value)
         } else {
             // TODO GENMC: this may need to be replaced, and the value should be requested from GenMC instead:
@@ -748,15 +738,9 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
 
         // Inform GenMC about the atomic store.
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-            // TODO GENMC: find a better way to get the alloc_id
-            let address = dest.ptr().addr().bytes_usize();
-            let size = dest.layout.size.bytes().try_into().unwrap();
-            let ptr: interpret::Pointer<Provenance> =
-                interpret::Pointer::new(dest.ptr().provenance.unwrap(), dest.ptr().addr());
-            let (alloc_id, _) = this.ptr_get_alloc(ptr, size).unwrap();
-
-            let size = dest.layout.size.bytes_usize();
-            genmc_ctx.atomic_store(&this.machine, alloc_id, address, size, val, atomic).unwrap(); // TODO GENMC proper error handling
+            let address = dest.ptr().addr();
+            let size = dest.layout.size;
+            genmc_ctx.atomic_store(&this.machine, address, size, val, atomic).unwrap(); // TODO GENMC proper error handling
         }
 
         this.buffered_atomic_write(val, dest, atomic, old_val)
@@ -944,7 +928,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
                 )
             }
             machine::ConcurrencyHandler::GenMC(genmc_ctx) => {
-                genmc_ctx.atomic_fence(&this.machine).unwrap(); // TODO GENMC: proper error handling
+                genmc_ctx.atomic_fence(&this.machine, atomic).unwrap(); // TODO GENMC: proper error handling
                 interp_ok(())
             }
         }
