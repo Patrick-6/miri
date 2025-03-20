@@ -1440,17 +1440,8 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             machine
                 .emit_diagnostic(NonHaltingDiagnostic::AccessedAlloc(alloc_id, AccessKind::Read));
         }
-        if let Some(data_race) = &alloc_extra.data_race {
-            data_race.read(alloc_id, range, NaReadType::Read, None, machine)?;
-        }
         if let Some(borrow_tracker) = &alloc_extra.borrow_tracker {
             borrow_tracker.before_memory_read(alloc_id, prov_extra, range, machine)?;
-        }
-        if let Some(_weak_memory) = &alloc_extra.weak_memory {
-            // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
-            eprintln!("MIRI: TODO GENMC: weak_memory check skipped");
-            // weak_memory
-            //     .memory_accessed(range, machine.concurrency_handler.as_data_race_ref().unwrap());
         }
         // TODO GENMC: combine this with code for the data race checker (if any)
         if let Some(genmc_ctx) = machine.concurrency_handler.as_genmc_ref() {
@@ -1465,6 +1456,15 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
 
             // let _read_value =
             genmc_ctx.memory_load(machine, address, range.size).unwrap(); // TODO GENMC proper error handling
+            return interp_ok(());
+        }
+
+        if let Some(data_race) = &alloc_extra.data_race {
+            data_race.read(alloc_id, range, NaReadType::Read, None, machine)?;
+        }
+        if let Some(weak_memory) = &alloc_extra.weak_memory {
+            weak_memory
+                .memory_accessed(range, machine.concurrency_handler.as_data_race_ref().unwrap());
         }
         interp_ok(())
     }
@@ -1482,17 +1482,8 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             machine
                 .emit_diagnostic(NonHaltingDiagnostic::AccessedAlloc(alloc_id, AccessKind::Write));
         }
-        if let Some(data_race) = &mut alloc_extra.data_race {
-            data_race.write(alloc_id, range, NaWriteType::Write, None, machine)?;
-        }
         if let Some(borrow_tracker) = &mut alloc_extra.borrow_tracker {
             borrow_tracker.before_memory_write(alloc_id, prov_extra, range, machine)?;
-        }
-        if let Some(_weak_memory) = &alloc_extra.weak_memory {
-            // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
-            eprintln!("MIRI: TODO GENMC: weak_memory check skipped");
-            // weak_memory
-            //     .memory_accessed(range, machine.concurrency_handler.as_data_race_ref().unwrap());
         }
         // TODO GENMC: combined this with code for the data race checker (if any)
         if let Some(genmc_ctx) = machine.concurrency_handler.as_genmc_ref() {
@@ -1500,6 +1491,15 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             // let address = todo!();
             let address = Size::from_bytes(42);
             genmc_ctx.memory_store(machine, address, range.size).unwrap(); // TODO GENMC proper error handling
+            return interp_ok(());
+        }
+
+        if let Some(data_race) = &mut alloc_extra.data_race {
+            data_race.write(alloc_id, range, NaWriteType::Write, None, machine)?;
+        }
+        if let Some(weak_memory) = &alloc_extra.weak_memory {
+            weak_memory
+                .memory_accessed(range, machine.concurrency_handler.as_data_race_ref().unwrap());
         }
         interp_ok(())
     }
@@ -1518,7 +1518,15 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         if machine.tracked_alloc_ids.contains(&alloc_id) {
             machine.emit_diagnostic(NonHaltingDiagnostic::FreedAlloc(alloc_id));
         }
-        if let Some(data_race) = &mut alloc_extra.data_race {
+
+        // TODO GENMC: inform GenMC about the free
+        // TODO GENMC: combined this with code for the data race checker (if any)
+        if let Some(genmc_ctx) = machine.concurrency_handler.as_genmc_ref() {
+            // let address = base_addr.;
+            // let address = todo!();
+            let address = Size::from_bytes(42);
+            genmc_ctx.handle_dealloc(machine, address, size, align, kind).unwrap();
+        } else if let Some(data_race) = &mut alloc_extra.data_race {
             data_race.write(
                 alloc_id,
                 alloc_range(Size::ZERO, size),
@@ -1535,15 +1543,6 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             *deallocated_at = Some(machine.current_span());
         }
         machine.free_alloc_id(alloc_id, size, align, kind);
-
-        // TODO GENMC: inform GenMC about the free
-        // TODO GENMC: combined this with code for the data race checker (if any)
-        if let Some(genmc_ctx) = machine.concurrency_handler.as_genmc_ref() {
-            // let address = base_addr.;
-            // let address = todo!();
-            let address = Size::from_bytes(42);
-            genmc_ctx.handle_dealloc(machine, address, size, align, kind).unwrap();
-        }
 
         interp_ok(())
     }
@@ -1777,6 +1776,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         {
             data_race.local_moved_to_memory(local, alloc_info.data_race.as_mut().unwrap(), machine);
         }
+        // TODO GENMC: how to handle this (if at all)?
         interp_ok(())
     }
 

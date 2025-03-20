@@ -763,14 +763,7 @@ impl<'tcx> ThreadManager<'tcx> {
         //
 
         if let Some(genmc_ctx) = concurrency_handler.as_genmc_ref() {
-            let active_threads_count =
-                self.threads.iter().filter(|thread| thread.state.is_enabled()).count();
-            eprintln!(
-                "TODO GENMC: thread::schedule called: need to inform GenMC, ask for next thread to schedule (active thread {}, active threads: {active_threads_count}, total threads: {})",
-                self.active_thread.index(),
-                self.threads.len()
-            );
-            let next_thread_id = genmc_ctx.schedule_thread(self).unwrap(); // TODO GENMC
+            let next_thread_id = genmc_ctx.schedule_thread(self).unwrap();
             self.active_thread = next_thread_id;
         } else {
             // TODO GENMC: in GenMC mode, ask GenMC for the next thread to schedule
