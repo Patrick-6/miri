@@ -233,6 +233,8 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
 
                 // TODO GENMC: is this the correct place to put this?
 
+                genmc_ctx.print_genmc_graph();
+
                 let is_halting = genmc_ctx.is_halting();
                 let is_moot = genmc_ctx.is_moot();
                 let is_exploration_done = genmc_ctx.is_exploration_done();
@@ -240,7 +242,6 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
                     "Execution done (return code: {return_code}), GenMC: is_halting: {is_halting}, is_moot: {is_moot}, is_exploration_done: {is_exploration_done}",
                 );
 
-                genmc_ctx.print_genmc_graph();
 
                 if is_exploration_done {
                     eprintln!(

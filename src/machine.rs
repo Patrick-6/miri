@@ -1459,17 +1459,12 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
 
             // TODO GENMC: find a better way to get the alloc_id
             // let address = dest.ptr().addr().bits_usize();
-            let address = alloc_id.0.get().try_into().unwrap(); // TODO GENMC: what is the proper address here?
-            // let ptr: interpret::Pointer<Provenance> = interpret::Pointer::new(place.ptr().provenance.unwrap(), place.ptr().addr());
-            // let size = place.layout.size.bits().try_into().unwrap();
-            // let alloc_id = this.ptr_get_alloc(ptr, size);
-            // let address = range.
-
-            // machine.alloc_addresses.borrow().addr_from_alloc_id(alloc_id, alloc_extra);
-            let size = range.size.bytes_usize();
+            // let address = alloc_id.0.get().try_into().unwrap(); // TODO GENMC: what is the proper address here?
+            // let address = todo!();
+            let address = Size::from_bytes(42);
 
             // let _read_value =
-            genmc_ctx.memory_load(machine, alloc_id, address, size).unwrap(); // TODO GENMC proper error handling
+            genmc_ctx.memory_load(machine, address, range.size).unwrap(); // TODO GENMC proper error handling
         }
         interp_ok(())
     }
@@ -1501,11 +1496,10 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         }
         // TODO GENMC: combined this with code for the data race checker (if any)
         if let Some(genmc_ctx) = machine.concurrency_handler.as_genmc_ref() {
-            // TODO GENMC: should GenMC be informed about pending memory write?
-            // machine.alloc_addresses.borrow().addr_from_alloc_id(alloc_id,)
-            let address = alloc_id.0.get().try_into().unwrap(); // TODO GENMC: what is the proper address here?
-            let size = range.size.bytes_usize();
-            genmc_ctx.memory_store(machine, alloc_id, address, size).unwrap(); // TODO GENMC proper error handling
+            // TODO GENMC: what is the proper address here?
+            // let address = todo!();
+            let address = Size::from_bytes(42);
+            genmc_ctx.memory_store(machine, address, range.size).unwrap(); // TODO GENMC proper error handling
         }
         interp_ok(())
     }
@@ -1545,7 +1539,10 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         // TODO GENMC: inform GenMC about the free
         // TODO GENMC: combined this with code for the data race checker (if any)
         if let Some(genmc_ctx) = machine.concurrency_handler.as_genmc_ref() {
-            genmc_ctx.handle_dealloc(machine, alloc_id, size, align, kind).unwrap();
+            // let address = base_addr.;
+            // let address = todo!();
+            let address = Size::from_bytes(42);
+            genmc_ctx.handle_dealloc(machine, address, size, align, kind).unwrap();
         }
 
         interp_ok(())

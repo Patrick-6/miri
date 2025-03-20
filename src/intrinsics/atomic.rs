@@ -200,29 +200,38 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
                 "atomic arithmetic operations only work on integer and raw pointer types",
             );
         }
+        // TODO GENMC: should this check be done in GenMC mode?
         if rhs.layout.ty != place.layout.ty {
             span_bug!(this.cur_span(), "atomic arithmetic operation type mismatch");
-        }
-
-        match atomic_op {
-            AtomicOp::Min => {
-                let old = this.atomic_min_max_scalar(&place, rhs, true, atomic)?;
-                this.write_immediate(*old, dest)?; // old value is returned
-            }
-            AtomicOp::Max => {
-                let old = this.atomic_min_max_scalar(&place, rhs, false, atomic)?;
-                this.write_immediate(*old, dest)?; // old value is returned
-            }
-            AtomicOp::MirOp(op, not) => {
-                let old = this.atomic_rmw_op_immediate(&place, &rhs, op, not, atomic)?;
-                this.write_immediate(*old, dest)?; // old value is returned
-            }
         }
 
         // Inform GenMC about the atomic rmw operation.
         // TODO GENMC: is this the correct place to put this?
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-            genmc_ctx.atomic_rmw_op(&this.machine).unwrap(); // TODO GENMC: proper error handling
+            let address = place.ptr().addr();
+            let size = place.layout.size;
+            let rhs_scalar = rhs.to_scalar();
+            let is_unsigned = matches!(rhs.layout.ty.kind(), ty::Uint(_));
+            let _ = genmc_ctx
+                .atomic_rmw_op(&this.machine, address, size, atomic, atomic_op, rhs_scalar, is_unsigned)
+                .unwrap(); // TODO GENMC: proper error handling
+            todo!("Need to handle which values are returned/written");
+            // this.write_immediate(*old, dest)?; // old value is returned
+        } else {
+            match atomic_op {
+                AtomicOp::Min => {
+                    let old = this.atomic_min_max_scalar(&place, rhs, true, atomic)?;
+                    this.write_immediate(*old, dest)?; // old value is returned
+                }
+                AtomicOp::Max => {
+                    let old = this.atomic_min_max_scalar(&place, rhs, false, atomic)?;
+                    this.write_immediate(*old, dest)?; // old value is returned
+                }
+                AtomicOp::MirOp(op, not) => {
+                    let old = this.atomic_rmw_op_immediate(&place, &rhs, op, not, atomic)?;
+                    this.write_immediate(*old, dest)?; // old value is returned
+                }
+            }
         }
         interp_ok(()) // TODO GENMC: is it ok to move the interp_ok call outside the match statement?
     }
