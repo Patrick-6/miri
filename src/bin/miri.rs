@@ -218,7 +218,7 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
             let max_reps = 8;
 
             for rep in 0..max_reps {
-                eprintln!("MIRI: running GenMC loop {}/{max_reps}", rep + 1);
+                tracing::info!("MIRI: running GenMC loop {}/{max_reps}", rep + 1);
                 let return_code = miri::eval_entry(
                     tcx,
                     entry_def_id,
@@ -235,24 +235,21 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
 
                 genmc_ctx.print_genmc_graph();
 
-                let is_halting = genmc_ctx.is_halting();
-                let is_moot = genmc_ctx.is_moot();
                 let is_exploration_done = genmc_ctx.is_exploration_done();
-                eprintln!(
-                    "Execution done (return code: {return_code}), GenMC: is_halting: {is_halting}, is_moot: {is_moot}, is_exploration_done: {is_exploration_done}",
+                tracing::info!(
+                    "(GenMC Mode) Execution done (return code: {return_code}), is_exploration_done: {is_exploration_done}",
                 );
 
-
                 if is_exploration_done {
-                    eprintln!(
-                        "SUCCESS! Miri finished all interleavings (after rep {}/{max_reps})!",
-                        rep + 1
-                    );
+                    eprintln!("(GenMC Mode) Finished after {} iterations.", rep + 1);
 
+                    // TODO GENMC: what is an appropriate return code? (since there are possibly many)
                     std::process::exit(return_code);
                 }
             }
-            eprintln!("ERROR: Miri could not explore all interleavings in {max_reps} repetitions!");
+            eprintln!(
+                "(GenMC Mode) Could not explore all interleavings in {max_reps} repetitions!"
+            );
             std::process::exit(1);
         } else {
             let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, &config, None)
@@ -650,7 +647,10 @@ fn main() {
             // TODO GENMC: add to documentation
             // TODO GENMC: add more GenMC options
             miri_config.genmc_config = Some(Default::default());
-            miri_config.data_race_detector = true; // GenMC always does data race detection in GenMC mode
+            // GenMC handles data race detection and weak memory emulation, so we disable the Miri equivalents:
+            // TODO GENMC: make sure this isn't reactivated by other flags
+            miri_config.data_race_detector = false;
+            miri_config.weak_memory_emulation = false;
         } else if let Some(param) = arg.strip_prefix("-Zmiri-env-forward=") {
             miri_config.forwarded_env_vars.push(param.to_owned());
         } else if let Some(param) = arg.strip_prefix("-Zmiri-env-set=") {

@@ -1310,59 +1310,6 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
                 .insert(id, (ecx.machine.current_span(), None));
         }
 
-        // TODO GENMC: HACK: GenMC needs to pointer of the allocation, this is a hack for now:
-        // 'GenMC: {
-        //     if let Some(genmc_ctx) = &ecx.machine.genmc_ctx {
-        //         // let address = ecx.addr_from_alloc_id(id);
-        //         // let address = ecx.machine.alloc_addresses.borrow();
-        //         // ecx.ptr_get_alloc(ptr, size)
-        //         let ptr = id.into();
-        //         // eprintln!("alloc_addresses.base_addr: {:?}", ecx.machine.alloc_addresses.borrow().base_addr );
-        //         // let requested_address = *ecx.machine.alloc_addresses.borrow().base_addr.get(&id).unwrap();
-        //         // let requested_address = requested_address.try_into().unwrap();
-        //         eprintln!("in init_alloc_extra: {id:?}, kind: {kind:?}");
-        //         match kind {
-        //             interpret::MemoryKind::Stack => {
-        //                 eprintln!(
-        //                     "in init_alloc_extra: SKIP informing GenMC for: {id:?}, kind: {kind:?}"
-        //                 );
-        //             }
-        //             interpret::MemoryKind::CallerLocation => {
-        //                 eprintln!(
-        //                     "in init_alloc_extra: SKIP informing GenMC for: {id:?}, kind: {kind:?}"
-        //                 );
-        //             }
-        //             interpret::MemoryKind::Machine(memory_kind) => {
-        //                 use MiriMemoryKind::*;
-        //                 match memory_kind {
-        //                     ExternStatic | Runtime | Machine => {
-        //                         eprintln!(
-        //                             "in init_alloc_extra: SKIP informing GenMC for: {id:?}, kind: {kind:?}"
-        //                         );
-        //                         break 'GenMC;
-        //                     }
-        //                     _ => {} // Rust => todo!(),
-        //                             // Miri => todo!(),
-        //                             // C => todo!(),
-        //                             // WinHeap => todo!(),
-        //                             // WinLocal => todo!(),
-        //                             // Runtime => todo!(),
-        //                             // Global => todo!(),
-        //                             // Tls => todo!(),
-        //                             // Mmap => todo!(),
-        //                 }
-        //                 let root_pointer = ecx.global_root_pointer(ptr).unwrap();
-        //                 // TODO GENMC: This is probably incorrect, since `into_parts` shouldn't be called here:
-        //                 let (_, requested_address) = root_pointer.into_parts();
-        //                 let requested_address = requested_address.bytes_usize();
-
-        //                 // let requested_address = 42; // TODO GENMC: get base address of AllocId
-        //                 genmc_ctx.handle_alloc(id, requested_address, size, align).unwrap(); // TODO GENMC: proper error handling
-        //             }
-        //         }
-        //     }
-        // }
-
         interp_ok(AllocExtra {
             borrow_tracker,
             data_race,
@@ -1489,17 +1436,8 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             machine
                 .emit_diagnostic(NonHaltingDiagnostic::AccessedAlloc(alloc_id, AccessKind::Read));
         }
-        if let Some(data_race) = &alloc_extra.data_race {
-            data_race.read(alloc_id, range, NaReadType::Read, None, machine)?;
-        }
         if let Some(borrow_tracker) = &alloc_extra.borrow_tracker {
             borrow_tracker.before_memory_read(alloc_id, prov_extra, range, machine)?;
-        }
-        if let Some(_weak_memory) = &alloc_extra.weak_memory {
-            // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
-            eprintln!("MIRI: TODO GENMC: weak_memory check skipped");
-            // weak_memory
-            //     .memory_accessed(range, machine.concurrency_handler.as_data_race_ref().unwrap());
         }
         // TODO GENMC: combine this with code for the data race checker (if any)
         if let Some(genmc_ctx) = machine.concurrency_handler.as_genmc_ref() {
@@ -1514,6 +1452,15 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
 
             // let _read_value =
             genmc_ctx.memory_load(machine, address, range.size).unwrap(); // TODO GENMC proper error handling
+            return interp_ok(());
+        }
+
+        if let Some(data_race) = &alloc_extra.data_race {
+            data_race.read(alloc_id, range, NaReadType::Read, None, machine)?;
+        }
+        if let Some(weak_memory) = &alloc_extra.weak_memory {
+            weak_memory
+                .memory_accessed(range, machine.concurrency_handler.as_data_race_ref().unwrap());
         }
         interp_ok(())
     }
@@ -1530,17 +1477,8 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             machine
                 .emit_diagnostic(NonHaltingDiagnostic::AccessedAlloc(alloc_id, AccessKind::Write));
         }
-        if let Some(data_race) = &mut alloc_extra.data_race {
-            data_race.write(alloc_id, range, NaWriteType::Write, None, machine)?;
-        }
         if let Some(borrow_tracker) = &mut alloc_extra.borrow_tracker {
             borrow_tracker.before_memory_write(alloc_id, prov_extra, range, machine)?;
-        }
-        if let Some(_weak_memory) = &alloc_extra.weak_memory {
-            // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
-            eprintln!("MIRI: TODO GENMC: weak_memory check skipped");
-            // weak_memory
-            //     .memory_accessed(range, machine.concurrency_handler.as_data_race_ref().unwrap());
         }
         // TODO GENMC: combined this with code for the data race checker (if any)
         if let Some(genmc_ctx) = machine.concurrency_handler.as_genmc_ref() {
@@ -1548,6 +1486,15 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             // let address = todo!();
             let address = Size::from_bytes(42);
             genmc_ctx.memory_store(machine, address, range.size).unwrap(); // TODO GENMC proper error handling
+            return interp_ok(());
+        }
+
+        if let Some(data_race) = &mut alloc_extra.data_race {
+            data_race.write(alloc_id, range, NaWriteType::Write, None, machine)?;
+        }
+        if let Some(weak_memory) = &alloc_extra.weak_memory {
+            weak_memory
+                .memory_accessed(range, machine.concurrency_handler.as_data_race_ref().unwrap());
         }
         interp_ok(())
     }
@@ -1565,7 +1512,15 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         if machine.tracked_alloc_ids.contains(&alloc_id) {
             machine.emit_diagnostic(NonHaltingDiagnostic::FreedAlloc(alloc_id));
         }
-        if let Some(data_race) = &mut alloc_extra.data_race {
+
+        // TODO GENMC: inform GenMC about the free
+        // TODO GENMC: combined this with code for the data race checker (if any)
+        if let Some(genmc_ctx) = machine.concurrency_handler.as_genmc_ref() {
+            // let address = base_addr.;
+            // let address = todo!();
+            let address = Size::from_bytes(42);
+            genmc_ctx.handle_dealloc(machine, address, size, align, kind).unwrap();
+        } else if let Some(data_race) = &mut alloc_extra.data_race {
             data_race.write(
                 alloc_id,
                 alloc_range(Size::ZERO, size),
@@ -1582,15 +1537,6 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             *deallocated_at = Some(machine.current_span());
         }
         machine.free_alloc_id(alloc_id, size, align, kind);
-
-        // TODO GENMC: inform GenMC about the free
-        // TODO GENMC: combined this with code for the data race checker (if any)
-        if let Some(genmc_ctx) = machine.concurrency_handler.as_genmc_ref() {
-            // let address = base_addr.;
-            // let address = todo!();
-            let address = Size::from_bytes(42);
-            genmc_ctx.handle_dealloc(machine, address, size, align, kind).unwrap();
-        }
 
         interp_ok(())
     }
@@ -1824,6 +1770,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         {
             data_race.local_moved_to_memory(local, alloc_info.data_race.as_mut().unwrap(), machine);
         }
+        // TODO GENMC: how to handle this (if at all)?
         interp_ok(())
     }
 
