@@ -3,6 +3,9 @@
 mod atomic;
 mod simd;
 
+// TODO GENMC: is exposing this type ok?
+pub use self::atomic::AtomicOp;
+
 use rand::Rng;
 use rustc_abi::Size;
 use rustc_apfloat::{Float, Round};
