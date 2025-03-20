@@ -580,6 +580,8 @@ impl<'tcx> ThreadManager<'tcx> {
     fn detach_thread(&mut self, id: ThreadId, allow_terminated_joined: bool) -> InterpResult<'tcx> {
         trace!("detaching {:?}", id);
 
+        tracing::info!("GenMC: TODO GENMC: does GenMC need special handling for detached threads?");
+
         let is_ub = if allow_terminated_joined && self.threads[id].state.is_terminated() {
             // "Detached" in particular means "not yet joined". Redundant detaching is still UB.
             self.threads[id].join_status == ThreadJoinStatus::Detached
@@ -763,14 +765,7 @@ impl<'tcx> ThreadManager<'tcx> {
         //
 
         if let Some(genmc_ctx) = concurrency_handler.as_genmc_ref() {
-            let active_threads_count =
-                self.threads.iter().filter(|thread| thread.state.is_enabled()).count();
-            eprintln!(
-                "TODO GENMC: thread::schedule called: need to inform GenMC, ask for next thread to schedule (active thread {}, active threads: {active_threads_count}, total threads: {})",
-                self.active_thread.index(),
-                self.threads.len()
-            );
-            let next_thread_id = genmc_ctx.schedule_thread(self).unwrap(); // TODO GENMC
+            let next_thread_id = genmc_ctx.schedule_thread(self).unwrap();
             self.active_thread = next_thread_id;
         } else {
             // TODO GENMC: in GenMC mode, ask GenMC for the next thread to schedule
@@ -922,7 +917,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         func_arg: ImmTy<'tcx>,
         ret_layout: TyAndLayout<'tcx>,
     ) -> InterpResult<'tcx, ThreadId> {
-        eprintln!("MIRI (TODO GENMC): start_regular_thread called!");
         let this = self.eval_context_mut();
 
         // Create the new thread
@@ -1206,10 +1200,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
 
         // TODO GENMC: ask GenMC which thread should be executed next (maybe always preempt here and then ask if it should be re-scheduled)
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-            // assert!(!genmc_ctx.should_preempt(), "unimplemented: preemption triggered by GenMC");
-            eprintln!(
-                "TODO GENMC: machine::before_terminator: asking GenMC if we should preempt the current thread."
-            );
             if genmc_ctx.should_preempt() {
                 this.yield_active_thread();
             }
