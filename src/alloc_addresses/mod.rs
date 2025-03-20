@@ -9,6 +9,7 @@ use std::cmp::max;
 use rand::Rng;
 use rustc_abi::{Align, Size};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use tracing::debug;
 
 use self::reuse_pool::ReusePool;
 use crate::concurrency::VClock;
@@ -113,28 +114,12 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
         alloc_id: AllocId,
         memory_kind: MemoryKind,
     ) -> InterpResult<'tcx, u64> {
-        eprintln!(
-            "TODO GENMC: DEBUG: addr_from_alloc_id_uncached called ({alloc_id:?}, memory_kind: {memory_kind:?})."
-        );
         let this = self.eval_context_ref();
         let info = this.get_alloc_info(alloc_id);
 
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-            // if info.size.bytes() == 0 {
-            //     let alignment = info.align.bytes();
-            //     let addr = 1024 + alignment;
-            //     let offset = addr % alignment;
-            //     let addr = addr - offset;
-            //     assert_eq!(0, addr % alignment);
-            //     eprintln!(
-            //         "MIRI: TODO GENMC: giving all ZSTs a fixed address for now (addr: {addr}, size: {:?}, align: {:?})",
-            //         info.size, info.align
-            //     );
-            //     return interp_ok(addr);
-            // }
-            let addr =
-                genmc_ctx.handle_alloc(&this.machine, alloc_id, info.size, info.align).unwrap(); // TODO GENMC: proper error handling
-            eprintln!("addr_from_alloc_id_uncached: {alloc_id:?} --> {addr}");
+            let addr = genmc_ctx.handle_alloc(&this.machine, info.size, info.align).unwrap(); // TODO GENMC: proper error handling
+            debug!("addr_from_alloc_id_uncached: {alloc_id:?} --> {addr}");
             return interp_ok(addr);
         }
 

@@ -18,7 +18,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         start_routine: &OpTy<'tcx>,
         arg: &OpTy<'tcx>,
     ) -> InterpResult<'tcx, ()> {
-        eprintln!("MIRI (TODO GENMC): pthread_create called!");
         let this = self.eval_context_mut();
 
         let thread_info_place = this.deref_pointer_as(thread, this.libc_ty_layout("pthread_t"))?;
@@ -35,7 +34,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             this.machine.layouts.mut_raw_ptr,
         )?;
 
-        eprintln!("MIRI (TODO GENMC): pthread_create exit ok!");
         interp_ok(())
     }
 
