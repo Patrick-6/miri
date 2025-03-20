@@ -176,8 +176,7 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
             //     );
             //     return interp_ok(addr);
             // }
-            let addr =
-                genmc_ctx.handle_alloc(&this.machine, alloc_id, info.size, info.align).unwrap(); // TODO GENMC: proper error handling
+            let addr = genmc_ctx.handle_alloc(&this.machine, info.size, info.align).unwrap(); // TODO GENMC: proper error handling
             eprintln!("addr_from_alloc_id_uncached: {alloc_id:?} --> {addr}");
             return interp_ok(addr);
         }
