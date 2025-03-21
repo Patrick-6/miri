@@ -18,9 +18,21 @@ use crate::{
 
 mod cxx_extra;
 
+pub use self::ffi::GenmcConfig;
+
 // TODO GENMC: extract the ffi module if possible, to reduce number of required recompilation
 #[cxx::bridge]
 mod ffi {
+
+    #[derive(Clone, Debug)]
+    struct GenmcConfig {
+        #[allow(unused)]
+        pub memory_model: String, // TODO GENMC: (is this even needed?) could potentially make this an enum
+
+        pub quiet: bool, // TODO GENMC: maybe make log-level more fine grained
+        // pub genmc_seed: u64; // OR: Option<u64>
+    }
+
     #[derive(Debug)]
     enum MemoryOrdering {
         NotAtomic = 0,
@@ -57,11 +69,11 @@ mod ffi {
 
         type MemoryOrdering;
         type RmwBinOp;
-        // type GenmcConfig; // TODO GENMC
         // type OperatingMode; // Estimation(budget) or Verification
+        
         type MiriGenMCShim;
 
-        fn createGenmcHandle(/* GenmcConfig config */ /* OperatingMode */)
+        fn createGenmcHandle(config: &GenmcConfig /* OperatingMode */)
          -> UniquePtr<MiriGenMCShim>;
 
         fn handleExecutionStart(self: Pin<&mut MiriGenMCShim>);
@@ -219,39 +231,15 @@ fn to_genmc_rmw_op(rmw_op: AtomicOp, is_unsigned: bool) -> RmwBinOp {
     }
 }
 
-// fn to_genmc_memory_ordering(atomic_ordering: Option<AtomicOrdering>) -> MemoryOrdering {
-//     let Some(atomic_ordering) = atomic_ordering else {
-//         return MemoryOrdering::NotAtomic;
-//     };
-//     match atomic_ordering {
-//         AtomicOrdering::Unordered => MemoryOrdering::Unordered,
-//         AtomicOrdering::Relaxed => MemoryOrdering::Relaxed,
-//         AtomicOrdering::Acquire => MemoryOrdering::Acquire,
-//         AtomicOrdering::Release => MemoryOrdering::Release,
-//         AtomicOrdering::AcquireRelease => MemoryOrdering::AcquireRelease,
-//         AtomicOrdering::SequentiallyConsistent => MemoryOrdering::SequentiallyConsistent,
-//     }
-// }
-
-#[derive(Clone, Debug)]
-pub struct GenmcConfig {
-    // TODO
-    #[allow(unused)]
-    pub(crate) memory_model: Box<str>, // TODO: could potentially make this an enum
-}
-
-#[allow(clippy::derivable_impls)] // TODO: remove
 impl Default for GenmcConfig {
     fn default() -> Self {
-        Self { memory_model: "RC11".into() }
+        Self { memory_model: "RC11".into(), quiet: true }
     }
 }
 
 pub struct GenmcCtx {
     // TODO GENMC: remove this Mutex if possible
     handle: RefCell<UniquePtr<MiriGenMCShim>>,
-    // TODO
-    // pub(crate) genmc_seed: u64; // OR: Option<u64>
     pub(crate) rng: RefCell<StdRng>, // TODO GENMC: temporary rng for handling scheduling
 }
 
@@ -291,9 +279,7 @@ impl GenmcCtx {
             );
         }
 
-        let _config = config; // TODO GENMC: implement GenMC config
-
-        let handle = createGenmcHandle();
+        let handle = createGenmcHandle(config);
         assert!(!handle.is_null());
         let handle = RefCell::new(handle);
 
@@ -574,7 +560,6 @@ impl GenmcCtx {
         active_thread_id: ThreadId,
         child_thread_id: ThreadId,
     ) -> Result<(), ()> {
-        // let curr_thread_id = machine.threads.active_thread().to_u32();
         let curr_thread_id = active_thread_id.to_u32();
         let child_thread_id = child_thread_id.to_u32();
 
