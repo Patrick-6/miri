@@ -700,7 +700,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
 
         // Inform GenMC about the atomic load.
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-            let address =  place.ptr().addr();
+            let address = place.ptr().addr();
             let size = place.layout.size;
             let value = genmc_ctx.atomic_load(&this.machine, address, size, atomic).unwrap(); // TODO GENMC proper error handling
             interp_ok(value)
@@ -1323,7 +1323,7 @@ impl FrameState {
         machine: &MiriMachine<'_>,
     ) {
         // TODO GENMC: inform GenMC about the variable (since it might now be relevant to GenMC)
-        eprintln!("MIRI: TODO GENMC: local_moved_to_memory: {local:?}");
+        tracing::info!("GenMC: TODO GENMC: local_moved_to_memory: {local:?}");
         let global = machine.concurrency_handler.as_data_race_ref().unwrap();
         if !global.race_detecting() {
             return;
@@ -1358,7 +1358,9 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
     fn allow_data_races_ref<R>(&self, op: impl FnOnce(&MiriInterpCx<'tcx>) -> R) -> R {
         let this = self.eval_context_ref();
         // TODO GENMC: is this relevant for GenMC? Does GenMC need to know about these racy accesses?
-        eprintln!("MIRI: allow_data_races_ref: TODO GENMC: does GenMC need to know about this?");
+        tracing::info!(
+            "GenMC: allow_data_races_ref: TODO GENMC: does GenMC need to know about this?"
+        );
         if let Some(data_race) = this.machine.concurrency_handler.as_data_race_ref() {
             let old = data_race.ongoing_action_data_race_free.replace(true);
             assert!(!old, "cannot nest allow_data_races");
@@ -1377,7 +1379,9 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
     fn allow_data_races_mut<R>(&mut self, op: impl FnOnce(&mut MiriInterpCx<'tcx>) -> R) -> R {
         let this = self.eval_context_mut();
         // TODO GENMC: is this relevant for GenMC? Does GenMC need to know about these racy accesses?
-        eprintln!("MIRI: allow_data_races_mut: TODO GENMC: does GenMC need to know about this?");
+        tracing::info!(
+            "GenMC: allow_data_races_mut: TODO GENMC: does GenMC need to know about this?"
+        );
         if let Some(data_race) = this.machine.concurrency_handler.as_data_race_ref() {
             let old = data_race.ongoing_action_data_race_free.replace(true);
             assert!(!old, "cannot nest allow_data_races");
@@ -1602,8 +1606,8 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
                 interp_ok(())
             }
             ConcurrencyHandler::GenMC(_genmc_ctx) => {
-                // TODO GENMC: how does GenMC validate atomic operations?
-                eprintln!("TODO GENMC: check how it validates atomic ops");
+                // TODO GENMC: how does GenMC validate atomic operations? Does it need to be called here?
+                tracing::info!("GenMC: TODO GENMC: check how it validates atomic ops");
                 interp_ok(())
             }
         }

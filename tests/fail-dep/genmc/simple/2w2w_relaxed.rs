@@ -1,3 +1,5 @@
+//@compile-flags: -Zmiri-genmc
+
 #![no_main]
 
 use std::ffi::c_void;
@@ -10,13 +12,6 @@ static Y: AtomicU64 = AtomicU64::new(0);
 
 const LOAD_ORD: Ordering = Ordering::Relaxed;
 const STORE_ORD: Ordering = Ordering::Relaxed;
-
-// const LOAD_ORD: Ordering = Ordering::Acquire;
-// const STORE_ORD: Ordering = Ordering::Release;
-
-// const LOAD_ORD: Ordering = Ordering::SeqCst;
-// const STORE_ORD: Ordering = Ordering::SeqCst;
-
 
 #[unsafe(no_mangle)]
 fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
@@ -44,7 +39,7 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
     let x = X.load(LOAD_ORD);
     let y = Y.load(LOAD_ORD);
     if x == 1 && y == 1 {
-        unsafe { std::hint::unreachable_unchecked() };
+        unsafe { std::hint::unreachable_unchecked() }; //~ ERROR: entering unreachable code
     }
     0
 }
