@@ -83,6 +83,7 @@ mod ffi {
 
     #[derive(Debug)]
     enum RmwBinOp {
+        Xchg,
         Min,
         Max,
         UMin,
@@ -192,11 +193,6 @@ impl Threads {
         eprintln!("Threads::set_next_thread({thread_id})");
     }
 }
-
-// #[allow(non_snake_case)]
-// fn isEnabled(threads: &Threads, thread_id: u32) -> bool {
-//     threads.is_enabled(thread_id)
-// }
 
 trait ToGenmcMemoryOrdering {
     fn convert(self) -> MemoryOrdering;
@@ -414,41 +410,38 @@ impl GenmcCtx {
         rhs_scalar: crate::Scalar,
         is_unsigned: bool,
     ) -> Result<crate::Scalar, ()> {
-        assert_ne!(0, size.bytes());
-        let curr_thread = machine.threads.active_thread().to_u32();
-        let genmc_address = size_to_genmc(address);
-        let genmc_size = size_to_genmc(size);
-
         let (load_ordering, store_ordering) = ordering.into();
-        info!(
-            "GenMC: atomic_rmw_op, thread: {curr_thread}, address: {address:?}, size: {size:?}, orderings: ({load_ordering:?}, {store_ordering:?})",
-        );
-
         let genmc_rmw_op = to_genmc_rmw_op(rmw_op, is_unsigned);
-        let genmc_rhs = scalar_to_genmc_scalar(rhs_scalar);
-
-        let mut mc = self.handle.borrow_mut();
-        let pinned_mc = mc.as_mut().expect("model checker should not be null");
-        let old_value = pinned_mc.handleReadModifyWrite(
-            curr_thread,
-            genmc_address,
-            genmc_size,
+        self.atomic_rmw_op_impl(
+            machine,
+            address,
+            size,
             load_ordering,
             store_ordering,
             genmc_rmw_op,
-            genmc_rhs,
-        );
-
-        let old_value_scalar_int = ScalarInt::try_from_uint(old_value, size).unwrap();
-        let old_value_scalar = crate::Scalar::Int(old_value_scalar_int);
-
-        Ok(old_value_scalar)
+            rhs_scalar,
+        )
     }
 
-    pub(crate) fn atomic_exchange<'tcx>(&self, _machine: &MiriMachine<'tcx>) -> Result<(), ()> {
-        info!("GenMC: atomic_exchange");
-        // TODO GENMC
-        todo!()
+    pub(crate) fn atomic_exchange<'tcx>(
+        &self,
+        machine: &MiriMachine<'tcx>,
+        address: Size,
+        size: Size,
+        rhs_scalar: crate::Scalar,
+        ordering: AtomicRwOrd,
+    ) -> Result<crate::Scalar, ()> {
+        let (load_ordering, store_ordering) = ordering.into();
+        let genmc_rmw_op = RmwBinOp::Xchg;
+        self.atomic_rmw_op_impl(
+            machine,
+            address,
+            size,
+            load_ordering,
+            store_ordering,
+            genmc_rmw_op,
+            rhs_scalar,
+        )
     }
 
     pub(crate) fn atomic_compare_exchange<'tcx>(
@@ -713,6 +706,45 @@ impl GenmcCtx {
         );
         // TODO GENMC
         Ok(())
+    }
+
+    pub(crate) fn atomic_rmw_op_impl<'tcx>(
+        &self,
+        machine: &MiriMachine<'tcx>,
+        address: Size,
+        size: Size,
+        load_ordering: MemoryOrdering,
+        store_ordering: MemoryOrdering,
+        genmc_rmw_op: RmwBinOp,
+        rhs_scalar: crate::Scalar,
+    ) -> Result<crate::Scalar, ()> {
+        assert_ne!(0, size.bytes());
+        let curr_thread = machine.threads.active_thread().to_u32();
+        let genmc_address = size_to_genmc(address);
+        let genmc_size = size_to_genmc(size);
+
+        info!(
+            "GenMC: atomic_rmw_op ({genmc_rmw_op:?}), thread: {curr_thread}, address: {address:?}, size: {size:?}, orderings: ({load_ordering:?}, {store_ordering:?})",
+        );
+
+        let genmc_rhs = scalar_to_genmc_scalar(rhs_scalar);
+
+        let mut mc = self.handle.borrow_mut();
+        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        let old_value = pinned_mc.handleReadModifyWrite(
+            curr_thread,
+            genmc_address,
+            genmc_size,
+            load_ordering,
+            store_ordering,
+            genmc_rmw_op,
+            genmc_rhs,
+        );
+
+        let old_value_scalar_int = ScalarInt::try_from_uint(old_value, size).unwrap();
+        let old_value_scalar = crate::Scalar::Int(old_value_scalar_int);
+
+        Ok(old_value_scalar)
     }
 }
 

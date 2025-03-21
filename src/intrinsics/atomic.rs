@@ -213,7 +213,15 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
             let rhs_scalar = rhs.to_scalar();
             let is_unsigned = matches!(rhs.layout.ty.kind(), ty::Uint(_));
             let _ = genmc_ctx
-                .atomic_rmw_op(&this.machine, address, size, atomic, atomic_op, rhs_scalar, is_unsigned)
+                .atomic_rmw_op(
+                    &this.machine,
+                    address,
+                    size,
+                    atomic,
+                    atomic_op,
+                    rhs_scalar,
+                    is_unsigned,
+                )
                 .unwrap(); // TODO GENMC: proper error handling
             todo!("Need to handle which values are returned/written");
             // this.write_immediate(*old, dest)?; // old value is returned
@@ -253,7 +261,9 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
 
         // Inform GenMC about the atomic atomic exchange.
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-            genmc_ctx.atomic_exchange(&this.machine).unwrap(); // TODO GENMC: proper error handling
+            let address = place.ptr().addr();
+            let size = place.layout.size;
+            genmc_ctx.atomic_exchange(&this.machine, address, size, new, atomic).unwrap(); // TODO GENMC: proper error handling
         }
 
         interp_ok(())
