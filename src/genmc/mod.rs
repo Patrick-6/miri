@@ -7,7 +7,7 @@ use rand::prelude::*;
 use rand::rngs::StdRng;
 use rustc_abi::{Align, Size};
 use rustc_middle::ty::ScalarInt;
-use tracing::warn;
+use tracing::{info, warn};
 
 use self::ffi::{MemoryOrdering, MiriGenMCShim, RmwBinOp, createGenmcHandle};
 use crate::intrinsics::AtomicOp;
@@ -18,19 +18,56 @@ use crate::{
 
 mod cxx_extra;
 
-pub use self::ffi::GenmcConfig;
+pub use self::ffi::GenmcParams;
+
+// TODO GENMC: document this:
+#[derive(Debug, Default, Clone)]
+pub struct GenmcConfig {
+    pub params: GenmcParams,
+    pub print_graph: GenmcPrintGraphSetting,
+}
+
+// TODO GENMC: document this:
+#[derive(Debug, Default, Clone, Copy)]
+pub enum GenmcPrintGraphSetting {
+    #[default]
+    None,
+    First,
+    All,
+}
+
+impl Default for GenmcParams {
+    fn default() -> Self {
+        Self { memory_model: "RC11".into(), quiet: true, print_random_schedule_seed: false }
+    }
+}
+
+impl GenmcConfig {
+    pub fn set_graph_printing(&mut self, param: &str) {
+        self.print_graph = match param {
+            "none" | "false" | "" => GenmcPrintGraphSetting::None,
+            "first" | "true" => GenmcPrintGraphSetting::First,
+            // TODO GENMC: are these graphs always the same? Would printing the last one make more sense?
+            "all" => GenmcPrintGraphSetting::All,
+            _ => todo!("Unsupported argument"),
+        }
+    }
+}
 
 // TODO GENMC: extract the ffi module if possible, to reduce number of required recompilation
 #[cxx::bridge]
 mod ffi {
 
+    /// Parameters that will be given to GenMC for setting up the model checker.
+    /// (The fields of this struct are visible to both Rust and C++)
     #[derive(Clone, Debug)]
-    struct GenmcConfig {
+    struct GenmcParams {
         #[allow(unused)]
         pub memory_model: String, // TODO GENMC: (is this even needed?) could potentially make this an enum
 
         pub quiet: bool, // TODO GENMC: maybe make log-level more fine grained
         // pub genmc_seed: u64; // OR: Option<u64>
+        pub print_random_schedule_seed: bool,
     }
 
     #[derive(Debug)]
@@ -70,11 +107,11 @@ mod ffi {
         type MemoryOrdering;
         type RmwBinOp;
         // type OperatingMode; // Estimation(budget) or Verification
-        
+
         type MiriGenMCShim;
 
-        fn createGenmcHandle(config: &GenmcConfig /* OperatingMode */)
-         -> UniquePtr<MiriGenMCShim>;
+        fn createGenmcHandle(config: &GenmcParams, /* OperatingMode */)
+        -> UniquePtr<MiriGenMCShim>;
 
         fn handleExecutionStart(self: Pin<&mut MiriGenMCShim>);
         fn handleExecutionEnd(self: Pin<&mut MiriGenMCShim>);
@@ -231,12 +268,6 @@ fn to_genmc_rmw_op(rmw_op: AtomicOp, is_unsigned: bool) -> RmwBinOp {
     }
 }
 
-impl Default for GenmcConfig {
-    fn default() -> Self {
-        Self { memory_model: "RC11".into(), quiet: true }
-    }
-}
-
 pub struct GenmcCtx {
     // TODO GENMC: remove this Mutex if possible
     handle: RefCell<UniquePtr<MiriGenMCShim>>,
@@ -266,7 +297,7 @@ fn size_to_genmc(miri_address: Size) -> usize {
 
 impl GenmcCtx {
     pub fn new(config: &GenmcConfig) -> Self {
-        tracing::trace!("GenMC: Creating new GenMC Context");
+        info!("GenMC: Creating new GenMC Context");
 
         /*
          * NOTE on integer sizes for storing addresses:
@@ -279,7 +310,7 @@ impl GenmcCtx {
             );
         }
 
-        let handle = createGenmcHandle(config);
+        let handle = createGenmcHandle(&config.params);
         assert!(!handle.is_null());
         let handle = RefCell::new(handle);
 
@@ -288,7 +319,7 @@ impl GenmcCtx {
     }
 
     pub fn print_genmc_graph(&self) {
-        tracing::trace!("GenMC: print the Execution graph");
+        info!("GenMC: print the Execution graph");
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
         pinned_mc.printGraph();
@@ -296,20 +327,20 @@ impl GenmcCtx {
 
     pub fn is_halting(&self) -> bool {
         // TODO GENMC: this probably shouldn't be exposed
-        tracing::trace!("GenMC: ask if execution is halting");
+        info!("GenMC: ask if execution is halting");
         let mc = self.handle.borrow();
         mc.isHalting()
     }
 
     pub fn is_moot(&self) -> bool {
         // TODO GENMC: this probably shouldn't be exposed
-        tracing::trace!("GenMC: ask if execution is moot");
+        info!("GenMC: ask if execution is moot");
         let mc = self.handle.borrow();
         mc.isMoot()
     }
 
     pub fn is_exploration_done(&self) -> bool {
-        tracing::trace!("GenMC: ask if execution exploration is done");
+        info!("GenMC: ask if execution exploration is done");
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
         pinned_mc.isExplorationDone()
@@ -318,14 +349,14 @@ impl GenmcCtx {
     /**** Memory access handling ****/
 
     pub(crate) fn handle_execution_start(&self) {
-        tracing::trace!("GenMC: inform GenMC that new execution started");
+        info!("GenMC: inform GenMC that new execution started");
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
         pinned_mc.handleExecutionStart();
     }
 
     pub(crate) fn handle_execution_end(&self) {
-        tracing::trace!("GenMC: inform GenMC that execution ended!");
+        info!("GenMC: inform GenMC that execution ended!");
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
         pinned_mc.handleExecutionEnd();
@@ -341,9 +372,6 @@ impl GenmcCtx {
         ordering: AtomicReadOrd,
     ) -> Result<crate::Scalar, ()> {
         let ordering = ordering.convert();
-        tracing::trace!(
-            "GenMC: atomic_load with ordering {ordering:?}, address: {address:?}, size: {size:?}"
-        );
         self.atomic_load_impl(machine, address, size, ordering)
     }
 
@@ -356,9 +384,6 @@ impl GenmcCtx {
         ordering: AtomicWriteOrd,
     ) -> Result<(), ()> {
         let ordering = ordering.convert();
-        tracing::trace!(
-            "GenMC: atomic_store of value {value:?}, with ordering {ordering:?}, address: {address:?}, size: {size:?}"
-        );
         self.atomic_store_impl(machine, address, size, value, ordering)
     }
 
@@ -367,7 +392,7 @@ impl GenmcCtx {
         machine: &MiriMachine<'tcx>,
         ordering: AtomicFenceOrd,
     ) -> Result<(), ()> {
-        tracing::trace!("GenMC: atomic_fence with ordering: {ordering:?}");
+        info!("GenMC: atomic_fence with ordering: {ordering:?}");
 
         let ordering = ordering.convert();
         let curr_thread = machine.threads.active_thread().to_u32();
@@ -395,7 +420,7 @@ impl GenmcCtx {
         let genmc_size = size_to_genmc(size);
 
         let (load_ordering, store_ordering) = ordering.into();
-        tracing::trace!(
+        info!(
             "GenMC: atomic_rmw_op, thread: {curr_thread}, address: {address:?}, size: {size:?}, orderings: ({load_ordering:?}, {store_ordering:?})",
         );
 
@@ -421,7 +446,7 @@ impl GenmcCtx {
     }
 
     pub(crate) fn atomic_exchange<'tcx>(&self, _machine: &MiriMachine<'tcx>) -> Result<(), ()> {
-        tracing::trace!("GenMC: atomic_exchange");
+        info!("GenMC: atomic_exchange");
         // TODO GENMC
         todo!()
     }
@@ -432,7 +457,7 @@ impl GenmcCtx {
         can_fail_spuriously: bool,
     ) -> Result<(), ()> {
         // TODO GENMC
-        tracing::trace!("GenMC: atomic_compare_exchange");
+        info!("GenMC: atomic_compare_exchange");
         dbg!(can_fail_spuriously);
         todo!()
     }
@@ -444,7 +469,7 @@ impl GenmcCtx {
         size: Size,
     ) -> Result<(), ()> {
         let curr_thread = machine.threads.active_thread().to_u32();
-        tracing::trace!(
+        info!(
             "GenMC: TODO GENMC: SKIP! received memory_load (non-atomic): thread: {curr_thread}, address: {address:?}, size: {size:?}, thread_id: {:?}",
             machine.threads.active_thread(),
         );
@@ -464,7 +489,7 @@ impl GenmcCtx {
         // value: crate::Scalar,
     ) -> Result<(), ()> {
         let curr_thread = machine.threads.active_thread().to_u32();
-        tracing::trace!(
+        info!(
             "GenMC: TODO GENMC: SKIP! received memory_store (non-atomic): thread: {curr_thread}, address: {address:?}, size: {size:?}"
         );
         // GenMC doesn't like ZSTs, and they can't have any data races, so we skip them
@@ -484,7 +509,7 @@ impl GenmcCtx {
         alignment: Align,
     ) -> Result<u64, ()> {
         let curr_thread = machine.threads.active_thread().to_u32();
-        tracing::trace!(
+        info!(
             "GenMC: handle_alloc (thread: {curr_thread}, size: {size:?}, alignment: {alignment:?})"
         );
         // kind: MemoryKind, TODO GENMC: Does GenMC care about the kind of Memory?
@@ -511,22 +536,24 @@ impl GenmcCtx {
         align: Align,
         kind: MemoryKind,
     ) -> Result<(), ()> {
-        tracing::trace!(
+        info!(
             "GenMC: TODO GENMC: (SKIP) telling GenMC about memory deallocation (address: {address:?})"
         );
-        return Ok(());
+        if true {
+            return Ok(());
+        }
 
         let curr_thread = machine.threads.active_thread().to_u32();
-        eprintln!(
-            "TODO GENMC: inform GenMC about memory deallocation (thread: {curr_thread}, address: 0x{address:?}, size: {size:?}, align: {align:?}, memory_kind: {kind:?}"
+        info!(
+            "GenMC: memory deallocation, thread: {curr_thread}, address: 0x{address:?}, size: {size:?}, align: {align:?}, memory_kind: {kind:?}"
         );
 
         let genmc_address = size_to_genmc(address);
         // GenMC doesn't support ZSTs, so we set the minimum size to 1 byte
         let genmc_size = size_to_genmc(size).max(1);
 
-        let pinned_mc =
-            self.handle.borrow_mut().as_mut().expect("model checker should not be null");
+        let mut mc = self.handle.borrow_mut();
+        let pinned_mc = mc.as_mut().expect("model checker should not be null");
         pinned_mc.handleFree(curr_thread, genmc_address, genmc_size);
 
         Ok(())
@@ -542,7 +569,7 @@ impl GenmcCtx {
         let new_thread_id = new_thread_id.to_u32();
         let parent_thread_id = threads.active_thread().to_u32();
 
-        tracing::trace!(
+        info!(
             "GenMC: handling thread creation (thread {parent_thread_id} spawned thread {new_thread_id})"
         );
 
@@ -563,7 +590,7 @@ impl GenmcCtx {
         let curr_thread_id = active_thread_id.to_u32();
         let child_thread_id = child_thread_id.to_u32();
 
-        tracing::trace!(
+        info!(
             "GenMC: handling thread joining (thread {curr_thread_id} joining thread {child_thread_id})"
         );
 
@@ -579,11 +606,11 @@ impl GenmcCtx {
         threads: &ThreadManager<'tcx>,
     ) -> Result<(), ()> {
         let curr_thread_id = threads.active_thread().to_u32();
-        let ret_val = 0; // TODO GENMC: do threads in Miri have a return value?
 
-        tracing::trace!(
-            "GenMC: handling thread finish (thread {curr_thread_id} returns with DUMMY value 0)"
-        );
+        // NOTE: Miri doesn't support return values for threads, but GenMC expects one, so we return 0
+        let ret_val = 0;
+
+        info!("GenMC: handling thread finish (thread {curr_thread_id} returns with dummy value 0)");
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
@@ -603,7 +630,7 @@ impl GenmcCtx {
         thread_manager: &ThreadManager<'tcx>,
     ) -> Result<ThreadId, ()> {
         // TODO GENMC
-        tracing::trace!("GenMC: TODO GENMC: ask who to schedule next");
+        info!("GenMC: TODO GENMC: ask who to schedule next");
 
         let mut threads = Threads::new();
 
@@ -638,8 +665,8 @@ impl GenmcCtx {
     ) -> Result<crate::Scalar, ()> {
         assert_ne!(0, size.bytes());
         let curr_thread = machine.threads.active_thread().to_u32();
-        tracing::trace!(
-            "GenMC: load, thread: {curr_thread}, address: {address:?}, size: {size:?}, {memory_ordering:?}"
+        info!(
+            "GenMC: load, thread: {curr_thread}, address: {address:?}, size: {size:?}, ordering: {memory_ordering:?}"
         );
         let genmc_address = size_to_genmc(address);
         let genmc_size = size_to_genmc(size);
@@ -670,7 +697,7 @@ impl GenmcCtx {
         let genmc_address = size_to_genmc(address);
         let genmc_size = size_to_genmc(size);
 
-        tracing::trace!(
+        info!(
             "GenMC: store, thread: {curr_thread}, address: {address:?}, size: {size:?}, ordering {memory_ordering:?}, value: {value:?}"
         );
 

@@ -1,3 +1,5 @@
+//@compile-flags: -Zmiri-genmc
+
 #![no_main]
 
 use std::ffi::c_void;
@@ -23,15 +25,15 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
     X.store(0, Ordering::Relaxed);
     Y.store(0, Ordering::Relaxed);
 
-    assert_eq!(0, libc::pthread_create(&raw mut thread_id_1, attr, thread_1, value));
-    assert_eq!(0, libc::pthread_create(&raw mut thread_id_2, attr, thread_2, value));
+    assert_eq!(0, unsafe { libc::pthread_create(&raw mut thread_id_1, attr, thread_1, value) });
+    assert_eq!(0, unsafe { libc::pthread_create(&raw mut thread_id_2, attr, thread_2, value) });
 
     0
 }
 
 extern "C" fn thread_1(_value: *mut c_void) -> *mut c_void {
-    Y.store(1, Ordering::SeqCst);
-    X.store(2, Ordering::SeqCst);
+    X.store(1, Ordering::SeqCst);
+    Y.store(2, Ordering::SeqCst);
     std::ptr::null_mut()
 }
 

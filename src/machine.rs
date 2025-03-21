@@ -475,8 +475,8 @@ impl VisitProvenance for ConcurrencyHandler {
             ConcurrencyHandler::DataRace(data_race) => data_race.visit_provenance(visit),
             ConcurrencyHandler::GenMC(_genmc_ctx) => {
                 // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
-                eprintln!(
-                    "MIRI: TODO GENMC: visit_provenance called on GenmcCtx, check if anything needs to be done here"
+                tracing::info!(
+                    "GenMC: TODO GENMC: visit_provenance called on GenmcCtx, check if anything needs to be done here"
                 );
             }
         }
@@ -1417,6 +1417,10 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         alloc: &'b Allocation,
     ) -> InterpResult<'tcx, Cow<'b, Allocation<Self::Provenance, Self::AllocExtra, Self::Bytes>>>
     {
+        tracing::info!(
+            "GenMC: TODO GENMC: DEBUG: adjust_global_allocation called, do we need to inform GenMC about this?"
+        );
+
         let alloc = alloc.adjust_from_tcx(
             &ecx.tcx,
             |bytes, align| ecx.get_global_alloc_bytes(id, bytes, align),

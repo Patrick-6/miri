@@ -1,3 +1,5 @@
+//@compile-flags: -Zmiri-genmc
+
 #![no_main]
 
 use std::sync::atomic::*;
