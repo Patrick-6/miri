@@ -1,3 +1,5 @@
+//@compile-flags: -Zmiri-genmc
+
 #![no_main]
 
 use std::ffi::c_void;
@@ -8,9 +10,8 @@ use libc::{self, pthread_attr_t, pthread_t};
 static X: AtomicU64 = AtomicU64::new(0);
 static Y: AtomicU64 = AtomicU64::new(0);
 
-const LOAD_ORD: Ordering = Ordering::Acquire;
+// const LOAD_ORD: Ordering = Ordering::Acquire;
 const STORE_ORD: Ordering = Ordering::Release;
-
 
 #[unsafe(no_mangle)]
 fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
@@ -27,8 +28,8 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
     X.store(0, STORE_ORD);
     Y.store(0, STORE_ORD);
 
-    assert_eq!(0, libc::pthread_create(&raw mut thread_id_1, attr, thread_1, value));
-    assert_eq!(0, libc::pthread_create(&raw mut thread_id_2, attr, thread_2, value));
+    assert_eq!(0, unsafe { libc::pthread_create(&raw mut thread_id_2, attr, thread_2, value) });
+    assert_eq!(0, unsafe { libc::pthread_create(&raw mut thread_id_1, attr, thread_1, value) });
 
     0
 }
