@@ -42,9 +42,30 @@ fn main() {
 
     let debug_flags = "";
     // let debug_flags = "-D_GLIBCXX_DEBUG"; // TODO: this causes issue, code compiled with CXX is incompatible with other code
-    let cpp_flags = Some(format!("-O{opt_level} -g {debug_flags} -I {WORKSPACE_INCLUDE_PATH} -I {CXX_BRIDGE_INCLUDE_PATH}"));
+    let cpp_flags = Some(format!(
+        "-O{opt_level} -g {debug_flags} -I {WORKSPACE_INCLUDE_PATH} -I {CXX_BRIDGE_INCLUDE_PATH}"
+    ));
     let autotools_cpp_flags = cpp_flags.clone().map(|flags| format!("CXXFLAGS={flags}"));
     let autotools_c_flags = cpp_flags.map(|flags| format!("CFLAGS={flags}"));
+
+    // HACK: GenMC uses autotools, this is a bit of a HACK to make this work (should be replaced at some point)
+    // (This needs to run before building the bridge, since it creates some required header files)
+    std::env::set_current_dir("./genmc").unwrap();
+    println!("cargo::warning=New working directory': {:?}'", std::env::current_dir().unwrap());
+    assert!(
+        Command::new("autoreconf")
+            .arg("--install")
+            .status()
+            .expect("failed to run command")
+            .success(),
+        "autoreconf failed!"
+    );
+    let args = [autotools_c_flags, autotools_cpp_flags].into_iter().flatten();
+    assert!(
+        Command::new("./configure").args(args).status().expect("failed to run command").success(),
+        "./configure failed!"
+    );
+    std::env::set_current_dir("../").unwrap();
 
     cxx_build::bridge("src/genmc/mod.rs")
         .compiler("g++") // TODO GENMC: make sure GenMC uses the same compiler as the cxx_bridge
@@ -64,27 +85,11 @@ fn main() {
         .file("./genmc/src/Verification/MiriInterface.hpp")
         .compile("genmc_interop");
 
+    // another HACK: we `make` GenMC (after the CXX bridge since it depends on it)
     // println!("cargo::warning=Old working directory': {:?}'", std::env::current_dir().unwrap());
     std::env::set_current_dir("./genmc").unwrap();
     println!("cargo::warning=New working directory': {:?}'", std::env::current_dir().unwrap());
 
-    assert!(
-        Command::new("autoreconf")
-            .arg("--install")
-            .status()
-            .expect("failed to run command")
-            .success(),
-        "autoreconf failed!"
-    );
-    // assert!(
-    //     Command::new("./configure").status().expect("failed to run command").success(),
-    //     "./configure failed!"
-    // );
-    let args = [autotools_c_flags, autotools_cpp_flags].into_iter().flatten();
-    assert!(
-        Command::new("./configure").args(args).status().expect("failed to run command").success(),
-        "./configure failed!"
-    );
     assert!(
         Command::new("make").arg("-j").status().expect("failed to run command").success(),
         "make failed!"
