@@ -215,8 +215,9 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
             std::process::exit(exit_code.0.into_inner());
         } else if let Some(genmc_ctx) = genmc_ctx {
             let genmc_config = config.genmc_config.as_ref().unwrap();
-            // TODO GENMC: implement GenMC loop
-            let max_reps = 8;
+
+            // TODO GENMC: remove this (it's here to prevent infinite loops during development):
+            let max_reps = 1024;
 
             for rep in 0..max_reps {
                 tracing::info!("MIRI: running GenMC loop {}/{max_reps}", rep + 1);

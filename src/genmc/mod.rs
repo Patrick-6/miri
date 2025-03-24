@@ -112,7 +112,7 @@ mod ffi {
     extern "Rust" {
         type Threads;
         fn is_enabled(self: &Threads, thread_id: u32) -> bool;
-        // fn set_next_thread(self: &mut Threads, thread_id: u32);
+        fn set_next_thread(self: &mut Threads, thread_id: u32);
     }
 
     unsafe extern "C++" {
@@ -240,7 +240,7 @@ impl ToGenmcMemoryOrdering for AtomicWriteOrd {
     fn convert(self) -> MemoryOrdering {
         match self {
             AtomicWriteOrd::Relaxed => MemoryOrdering::Relaxed,
-            AtomicWriteOrd::Release => MemoryOrdering::Relaxed,
+            AtomicWriteOrd::Release => MemoryOrdering::Release,
             AtomicWriteOrd::SeqCst => MemoryOrdering::SequentiallyConsistent,
         }
     }
@@ -346,7 +346,8 @@ impl GenmcCtx {
         assert!(!handle.is_null());
         let handle = RefCell::new(handle);
 
-        let rng = RefCell::new(StdRng::seed_from_u64(0));
+        let seed = 0;
+        let rng = RefCell::new(StdRng::seed_from_u64(seed));
         Self { handle, rng }
     }
 
@@ -508,7 +509,9 @@ impl GenmcCtx {
         );
 
         if can_fail_spuriously {
-            eprintln!("WARNING: TODO GENMC: implement spurious failures for compare_exchange_weak");
+            tracing::warn!(
+                "GenMC: TODO GENMC: implement spurious failures for compare_exchange_weak"
+            );
         }
 
         let curr_thread = machine.threads.active_thread().to_u32();
@@ -613,13 +616,6 @@ impl GenmcCtx {
         align: Align,
         kind: MemoryKind,
     ) -> Result<(), ()> {
-        info!(
-            "GenMC: TODO GENMC: (SKIP) telling GenMC about memory deallocation (address: {address:?})"
-        );
-        if true {
-            return Ok(());
-        }
-
         let curr_thread = machine.threads.active_thread().to_u32();
         info!(
             "GenMC: memory deallocation, thread: {curr_thread}, address: 0x{address:?}, size: {size:?}, align: {align:?}, memory_kind: {kind:?}"
