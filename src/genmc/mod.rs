@@ -9,11 +9,11 @@ use rustc_abi::{Align, Size};
 use rustc_middle::ty::ScalarInt;
 use tracing::{info, warn};
 
-use self::ffi::{MemoryOrdering, MiriGenMCShim, RmwBinOp, createGenmcHandle};
+use self::ffi::{MemoryOrdering, MiriGenMCShim, RmwBinOp, StoreEventType, createGenmcHandle};
 use crate::intrinsics::AtomicOp;
 use crate::{
-    AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, MemoryKind, MiriMachine, ThreadId,
-    ThreadManager,
+    AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, MemoryKind, MiriMachine, Scalar,
+    ThreadId, ThreadManager,
 };
 
 mod cxx_extra;
@@ -96,6 +96,19 @@ mod ffi {
         Xor,
     }
 
+    #[derive(Debug)]
+    enum StoreEventType {
+        Normal,
+        ReadModifyWrite,
+        CompareExchange,
+    }
+
+    #[derive(Debug)]
+    struct CompareExchangeResult {
+        read_value: u64, // TODO GENMC: handle bigger values
+        is_success: bool,
+    }
+
     extern "Rust" {
         type Threads;
         fn is_enabled(self: &Threads, thread_id: u32) -> bool;
@@ -107,7 +120,10 @@ mod ffi {
 
         type MemoryOrdering;
         type RmwBinOp;
+        type StoreEventType;
         // type OperatingMode; // Estimation(budget) or Verification
+
+        type CompareExchangeResult;
 
         type MiriGenMCShim;
 
@@ -134,6 +150,18 @@ mod ffi {
             rmw_op: RmwBinOp,
             rhs_value: u64,
         ) -> u64; // TODO GENMC: modify this to allow for handling pointers and u128
+        fn handleCompareExchange(
+            self: Pin<&mut MiriGenMCShim>,
+            thread_id: u32,
+            address: usize,
+            size: usize,
+            expected_value: u64,
+            new_value: u64,
+            success_load_ordering: MemoryOrdering,
+            success_store_ordering: MemoryOrdering,
+            fail_load_ordering: MemoryOrdering,
+            can_fail_spuriously: bool,
+        ) -> CompareExchangeResult;
         fn handleStore(
             self: Pin<&mut MiriGenMCShim>,
             thread_id: u32,
@@ -142,7 +170,7 @@ mod ffi {
             value: u64,
             // value: u128, // TODO GENMC: handle this
             memory_ordering: MemoryOrdering,
-            rmw: bool,
+            store_event_type: StoreEventType,
         );
         fn handleFence(
             self: Pin<&mut MiriGenMCShim>,
@@ -270,13 +298,21 @@ pub struct GenmcCtx {
     pub(crate) rng: RefCell<StdRng>, // TODO GENMC: temporary rng for handling scheduling
 }
 
-fn scalar_to_genmc_scalar(value: crate::Scalar) -> u64 {
-    // TODO: proper handling of `Scalar`
+fn scalar_to_genmc_scalar(value: Scalar) -> u64 {
+    // TODO GENMC: proper handling of `Scalar`
     match value {
         rustc_const_eval::interpret::Scalar::Int(scalar_int) =>
             scalar_int.to_uint(scalar_int.size()).try_into().unwrap(), // TODO GENMC: doesn't work for size != 8
         rustc_const_eval::interpret::Scalar::Ptr(_pointer, _size) => todo!(), // pointer.into_parts().1.bytes(),
     }
+}
+
+fn genmc_scalar_to_scalar(value: u64, size: Size) -> Scalar {
+    // TODO GENMC: proper handling of large integers
+    // TODO GENMC: proper handling of pointers (currently assumes all integers)
+
+    let value_scalar_int = ScalarInt::try_from_uint(value, size).unwrap();
+    Scalar::Int(value_scalar_int)
 }
 
 /// Convert an address selected by GenMC into Miri's type for addresses.
@@ -366,7 +402,7 @@ impl GenmcCtx {
         address: Size,
         size: Size,
         ordering: AtomicReadOrd,
-    ) -> Result<crate::Scalar, ()> {
+    ) -> Result<Scalar, ()> {
         let ordering = ordering.convert();
         self.atomic_load_impl(machine, address, size, ordering)
     }
@@ -376,7 +412,7 @@ impl GenmcCtx {
         machine: &MiriMachine<'tcx>,
         address: Size,
         size: Size,
-        value: crate::Scalar,
+        value: Scalar,
         ordering: AtomicWriteOrd,
     ) -> Result<(), ()> {
         let ordering = ordering.convert();
@@ -407,9 +443,9 @@ impl GenmcCtx {
         size: Size,
         ordering: AtomicRwOrd,
         rmw_op: AtomicOp,
-        rhs_scalar: crate::Scalar,
+        rhs_scalar: Scalar,
         is_unsigned: bool,
-    ) -> Result<crate::Scalar, ()> {
+    ) -> Result<Scalar, ()> {
         let (load_ordering, store_ordering) = ordering.into();
         let genmc_rmw_op = to_genmc_rmw_op(rmw_op, is_unsigned);
         tracing::info!(
@@ -431,9 +467,9 @@ impl GenmcCtx {
         machine: &MiriMachine<'tcx>,
         address: Size,
         size: Size,
-        rhs_scalar: crate::Scalar,
+        rhs_scalar: Scalar,
         ordering: AtomicRwOrd,
-    ) -> Result<crate::Scalar, ()> {
+    ) -> Result<Scalar, ()> {
         let (load_ordering, store_ordering) = ordering.into();
         let genmc_rmw_op = RmwBinOp::Xchg;
         tracing::info!(
@@ -452,13 +488,55 @@ impl GenmcCtx {
 
     pub(crate) fn atomic_compare_exchange<'tcx>(
         &self,
-        _machine: &MiriMachine<'tcx>,
+        machine: &MiriMachine<'tcx>,
+        address: Size,
+        size: Size,
+        expected_old_value: Scalar,
+        new_value: Scalar,
+        success: AtomicRwOrd,
+        fail: AtomicReadOrd,
         can_fail_spuriously: bool,
-    ) -> Result<(), ()> {
-        // TODO GENMC
-        info!("GenMC: atomic_compare_exchange");
-        dbg!(can_fail_spuriously);
-        todo!()
+    ) -> Result<(Scalar, bool), ()> {
+        let (success_load_ordering, success_store_ordering) = success.into();
+        let fail_load_ordering = fail.convert();
+
+        info!(
+            "GenMC: atomic_compare_exchange, address: {address:?}, size: {size:?} ({expected_old_value:?}, {new_value:?}, {success:?}, {fail:?}), can fail spuriously: {can_fail_spuriously}"
+        );
+        info!(
+            "GenMC: atomic_compare_exchange orderings: success: ({success_load_ordering:?}, {success_store_ordering:?}), failure load ordering: {fail_load_ordering:?}"
+        );
+
+        if can_fail_spuriously {
+            eprintln!("WARNING: TODO GENMC: implement spurious failures for compare_exchange_weak");
+        }
+
+        let curr_thread = machine.threads.active_thread().to_u32();
+        let genmc_address = size_to_genmc(address);
+        let genmc_size = size_to_genmc(size);
+
+        let genmc_expected_value = scalar_to_genmc_scalar(expected_old_value);
+        let genmc_new_value = scalar_to_genmc_scalar(new_value);
+
+        let mut mc = self.handle.borrow_mut();
+        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        let result = pinned_mc.handleCompareExchange(
+            curr_thread,
+            genmc_address,
+            genmc_size,
+            genmc_expected_value,
+            genmc_new_value,
+            success_load_ordering,
+            success_store_ordering,
+            fail_load_ordering,
+            can_fail_spuriously,
+        );
+
+        let return_scalar = genmc_scalar_to_scalar(result.read_value, size);
+        info!(
+            "GenMC: atomic_compare_exchange: result: {result:?}, returning scalar: {return_scalar:?}"
+        );
+        Ok((return_scalar, result.is_success))
     }
 
     pub(crate) fn memory_load<'tcx>(
@@ -661,7 +739,7 @@ impl GenmcCtx {
         address: Size,
         size: Size,
         memory_ordering: MemoryOrdering,
-    ) -> Result<crate::Scalar, ()> {
+    ) -> Result<Scalar, ()> {
         assert_ne!(0, size.bytes());
         let curr_thread = machine.threads.active_thread().to_u32();
         info!(
@@ -675,9 +753,7 @@ impl GenmcCtx {
         let read_value =
             pinned_mc.handleLoad(curr_thread, genmc_address, genmc_size, memory_ordering);
 
-        let scalar_int = ScalarInt::try_from_uint(read_value, size).unwrap();
-        let read_scalar = crate::Scalar::Int(scalar_int);
-
+        let read_scalar = genmc_scalar_to_scalar(read_value, size);
         Ok(read_scalar)
     }
 
@@ -686,7 +762,7 @@ impl GenmcCtx {
         machine: &MiriMachine<'tcx>,
         address: Size,
         size: Size,
-        value: crate::Scalar, // TODO GENMC: handle larger values
+        value: Scalar, // TODO GENMC: handle larger values
         memory_ordering: MemoryOrdering,
     ) -> Result<(), ()> {
         assert_ne!(0, size.bytes());
@@ -708,7 +784,7 @@ impl GenmcCtx {
             genmc_size,
             genmc_value,
             memory_ordering,
-            false,
+            StoreEventType::Normal,
         );
         // TODO GENMC
         Ok(())
@@ -722,8 +798,8 @@ impl GenmcCtx {
         load_ordering: MemoryOrdering,
         store_ordering: MemoryOrdering,
         genmc_rmw_op: RmwBinOp,
-        rhs_scalar: crate::Scalar,
-    ) -> Result<crate::Scalar, ()> {
+        rhs_scalar: Scalar,
+    ) -> Result<Scalar, ()> {
         assert_ne!(0, size.bytes());
         let curr_thread = machine.threads.active_thread().to_u32();
         let genmc_address = size_to_genmc(address);
@@ -747,9 +823,7 @@ impl GenmcCtx {
             genmc_rhs,
         );
 
-        let old_value_scalar_int = ScalarInt::try_from_uint(old_value, size).unwrap();
-        let old_value_scalar = crate::Scalar::Int(old_value_scalar_int);
-
+        let old_value_scalar = genmc_scalar_to_scalar(old_value, size);
         Ok(old_value_scalar)
     }
 }

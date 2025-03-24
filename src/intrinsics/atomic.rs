@@ -223,8 +223,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
                     is_unsigned,
                 )
                 .unwrap(); // TODO GENMC: proper error handling
-            let old = old.into();
-            this.write_immediate(old, dest)?;
+            this.write_scalar(old, dest)?;
         } else {
             match atomic_op {
                 AtomicOp::Min => {
@@ -282,8 +281,35 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
 
         let [place, expect_old, new] = check_intrinsic_arg_count(args)?;
         let place = this.deref_pointer(place)?;
-        let expect_old = this.read_immediate(expect_old)?; // read as immediate for the sake of `binary_op()`
         let new = this.read_scalar(new)?;
+
+        // Inform GenMC about the atomic atomic compare exchange.
+        if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
+            let address = place.ptr().addr();
+            let size = place.layout.size;
+            let expect_old_scalar = this.read_scalar(expect_old)?;
+            let (old, cmpxchg_success) = genmc_ctx
+                .atomic_compare_exchange(
+                    &this.machine,
+                    address,
+                    size,
+                    expect_old_scalar,
+                    new,
+                    success,
+                    fail,
+                    can_fail_spuriously,
+                )
+                .unwrap(); // TODO GENMC: proper error handling
+
+            let old = Immediate::ScalarPair(old, Scalar::from_bool(cmpxchg_success));
+
+            // Return old value.
+            this.write_immediate(old, dest)?;
+
+            return interp_ok(());
+        }
+
+        let expect_old = this.read_immediate(expect_old)?; // read as immediate for the sake of `binary_op()`
 
         let old = this.atomic_compare_exchange_scalar(
             &place,
@@ -296,11 +322,6 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
 
         // Return old value.
         this.write_immediate(old, dest)?;
-
-        // Inform GenMC about the atomic atomic compare exchange.
-        if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-            genmc_ctx.atomic_compare_exchange(&this.machine, can_fail_spuriously).unwrap(); // TODO GENMC: proper error handling
-        }
 
         interp_ok(())
     }
