@@ -412,6 +412,9 @@ impl GenmcCtx {
     ) -> Result<crate::Scalar, ()> {
         let (load_ordering, store_ordering) = ordering.into();
         let genmc_rmw_op = to_genmc_rmw_op(rmw_op, is_unsigned);
+        tracing::info!(
+            "GenMC: atomic_rmw_op (op: {genmc_rmw_op:?}): rhs value: {rhs_scalar:?}, is_unsigned: {is_unsigned}, orderings ({load_ordering:?}, {store_ordering:?})"
+        );
         self.atomic_rmw_op_impl(
             machine,
             address,
@@ -433,6 +436,9 @@ impl GenmcCtx {
     ) -> Result<crate::Scalar, ()> {
         let (load_ordering, store_ordering) = ordering.into();
         let genmc_rmw_op = RmwBinOp::Xchg;
+        tracing::info!(
+            "GenMC: atomic_exchange (op: {genmc_rmw_op:?}): new value: {rhs_scalar:?}, orderings ({load_ordering:?}, {store_ordering:?})"
+        );
         self.atomic_rmw_op_impl(
             machine,
             address,
@@ -724,7 +730,7 @@ impl GenmcCtx {
         let genmc_size = size_to_genmc(size);
 
         info!(
-            "GenMC: atomic_rmw_op ({genmc_rmw_op:?}), thread: {curr_thread}, address: {address:?}, size: {size:?}, orderings: ({load_ordering:?}, {store_ordering:?})",
+            "GenMC: atomic_rmw_op (op: {genmc_rmw_op:?}, rhs value: {rhs_scalar:?}), thread: {curr_thread}, address: {address:?}, size: {size:?}, orderings: ({load_ordering:?}, {store_ordering:?})",
         );
 
         let genmc_rhs = scalar_to_genmc_scalar(rhs_scalar);

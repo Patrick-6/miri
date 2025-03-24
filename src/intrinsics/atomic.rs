@@ -212,7 +212,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
             let size = place.layout.size;
             let rhs_scalar = rhs.to_scalar();
             let is_unsigned = matches!(rhs.layout.ty.kind(), ty::Uint(_));
-            let _ = genmc_ctx
+            let old = genmc_ctx
                 .atomic_rmw_op(
                     &this.machine,
                     address,
@@ -223,8 +223,8 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
                     is_unsigned,
                 )
                 .unwrap(); // TODO GENMC: proper error handling
-            todo!("Need to handle which values are returned/written");
-            // this.write_immediate(*old, dest)?; // old value is returned
+            let old = old.into();
+            this.write_immediate(old, dest)?;
         } else {
             match atomic_op {
                 AtomicOp::Min => {
@@ -263,7 +263,8 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
             let address = place.ptr().addr();
             let size = place.layout.size;
-            genmc_ctx.atomic_exchange(&this.machine, address, size, new, atomic).unwrap(); // TODO GENMC: proper error handling
+            let old = genmc_ctx.atomic_exchange(&this.machine, address, size, new, atomic).unwrap(); // TODO GENMC: proper error handling
+            this.write_scalar(old, dest)?; // old value is returned
         }
 
         interp_ok(())
