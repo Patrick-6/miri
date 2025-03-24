@@ -1513,7 +1513,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         _tcx: TyCtxtAt<'tcx>,
         machine: &mut Self,
         alloc_extra: &mut AllocExtra<'tcx>,
-        _ptr: Pointer,
+        ptr: Pointer,
         (alloc_id, prove_extra): (AllocId, Self::ProvenanceExtra),
         size: Size,
         align: Align,
@@ -1526,9 +1526,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         // TODO GENMC: inform GenMC about the free
         // TODO GENMC: combined this with code for the data race checker (if any)
         if let Some(genmc_ctx) = machine.concurrency_handler.as_genmc_ref() {
-            // let address = base_addr.;
-            // let address = todo!();
-            let address = Size::from_bytes(42);
+            let address = ptr.addr();
             genmc_ctx.handle_dealloc(machine, address, size, align, kind).unwrap();
         } else if let Some(data_race) = &mut alloc_extra.data_race {
             data_race.write(
