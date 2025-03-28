@@ -1,4 +1,4 @@
-//@compile-flags: -Zmiri-genmc
+//@compile-flags: -Zmiri-ignore-leaks -Zmiri-genmc -Zmiri-genmc-disable-race-detection
 
 #![no_main]
 

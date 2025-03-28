@@ -607,6 +607,7 @@ impl<'tcx> ThreadManager<'tcx> {
             throw_ub_format!("trying to join a detached thread");
         }
 
+        // TODO GENMC (CLEANUP):
         // fn handle_join(threads: &mut ThreadManager, concurrency_handler: &ConcurrencyHandler) {
         fn handle_join(
             threads: &mut ThreadManager<'_>,
@@ -1235,6 +1236,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 SchedulingAction::ExecuteTimeoutCallback => {
                     this.run_timeout_callback()?;
                 }
+                // TODO GENMC: do we need to sleep in GenMC Mode?
                 SchedulingAction::Sleep(duration) => {
                     this.machine.clock.sleep(duration);
                 }

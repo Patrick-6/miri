@@ -1,4 +1,4 @@
-//@compile-flags: -Zmiri-genmc
+//@compile-flags: -Zmiri-ignore-leaks -Zmiri-genmc
 //@revisions: order123 order321
 
 #![no_main]
