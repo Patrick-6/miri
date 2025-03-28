@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 #[allow(unused_imports)] // TODO GENMC: false warning?
 use std::pin::Pin;
 
@@ -9,7 +9,9 @@ use rustc_abi::{Align, Size};
 use rustc_middle::ty::ScalarInt;
 use tracing::{info, warn};
 
-use self::ffi::{MemoryOrdering, MiriGenMCShim, RmwBinOp, StoreEventType, createGenmcHandle};
+use self::ffi::{
+    MemoryOrdering, MiriGenMCShim, RmwBinOp, StoreEventType, ThreadState, createGenmcHandle,
+};
 use crate::intrinsics::AtomicOp;
 use crate::{
     AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, MemoryKind, MiriMachine, Scalar,
@@ -38,7 +40,12 @@ pub enum GenmcPrintGraphSetting {
 
 impl Default for GenmcParams {
     fn default() -> Self {
-        Self { memory_model: "RC11".into(), quiet: true, print_random_schedule_seed: false }
+        Self {
+            memory_model: "RC11".into(),
+            quiet: true,
+            print_random_schedule_seed: false,
+            disable_race_detection: false,
+        }
     }
 }
 
@@ -68,6 +75,7 @@ mod ffi {
         pub quiet: bool, // TODO GENMC: maybe make log-level more fine grained
         // pub genmc_seed: u64; // OR: Option<u64>
         pub print_random_schedule_seed: bool,
+        pub disable_race_detection: bool,
     }
 
     #[derive(Debug)]
@@ -104,12 +112,21 @@ mod ffi {
     }
 
     #[derive(Debug)]
+    enum ThreadState {
+        Enabled = 0,
+        Blocked = 1,
+        StackEmpty = 2,
+        Terminated = 3, // TODO GENMC: check if any other states/info is needed
+    }
+
+    #[derive(Debug)]
     struct CompareExchangeResult {
         read_value: u64, // TODO GENMC: handle bigger values
         is_success: bool,
     }
 
     extern "Rust" {
+        // TODO GENMC (CLEANUP): remove if not needed
         type Threads;
         fn is_enabled(self: &Threads, thread_id: u32) -> bool;
         fn set_next_thread(self: &mut Threads, thread_id: u32);
@@ -121,6 +138,7 @@ mod ffi {
         type MemoryOrdering;
         type RmwBinOp;
         type StoreEventType;
+        type ThreadState;
         // type OperatingMode; // Estimation(budget) or Verification
 
         type CompareExchangeResult;
@@ -191,7 +209,7 @@ mod ffi {
         fn handleThreadJoin(self: Pin<&mut MiriGenMCShim>, thread_id: u32, child_id: u32);
         fn handleThreadFinish(self: Pin<&mut MiriGenMCShim>, thread_id: u32, ret_val: u64);
 
-        fn scheduleNext(self: Pin<&mut MiriGenMCShim>, threads: &mut Threads) -> bool;
+        fn scheduleNext(self: Pin<&mut MiriGenMCShim>, thread_states: &[ThreadState]) -> i64;
         fn isHalting(self: &MiriGenMCShim) -> bool;
         fn isMoot(self: &MiriGenMCShim) -> bool;
         fn isExplorationDone(self: Pin<&mut MiriGenMCShim>) -> bool;
@@ -257,10 +275,12 @@ impl ToGenmcMemoryOrdering for AtomicFenceOrd {
     }
 }
 
+// TODO: add methods for this conversion:
+
 impl From<AtomicRwOrd> for (MemoryOrdering, MemoryOrdering) {
     fn from(value: AtomicRwOrd) -> Self {
         match value {
-            // TODO GENMC: are these correct?
+            // TODO GENMC: check if we need to implement Release ==> (Release, Release)
             AtomicRwOrd::Relaxed => (MemoryOrdering::Relaxed, MemoryOrdering::Relaxed),
             AtomicRwOrd::Acquire => (MemoryOrdering::Acquire, MemoryOrdering::Relaxed),
             AtomicRwOrd::Release => (MemoryOrdering::Relaxed, MemoryOrdering::Release),
@@ -295,7 +315,11 @@ fn to_genmc_rmw_op(rmw_op: AtomicOp, is_unsigned: bool) -> RmwBinOp {
 pub struct GenmcCtx {
     // TODO GENMC: remove this Mutex if possible
     handle: RefCell<UniquePtr<MiriGenMCShim>>,
+
+    #[allow(unused)] // TODO GENMC (CLEANUP)
     pub(crate) rng: RefCell<StdRng>, // TODO GENMC: temporary rng for handling scheduling
+
+    max_thread_id: Cell<u32>,
 }
 
 fn scalar_to_genmc_scalar(value: Scalar) -> u64 {
@@ -348,7 +372,8 @@ impl GenmcCtx {
 
         let seed = 0;
         let rng = RefCell::new(StdRng::seed_from_u64(seed));
-        Self { handle, rng }
+        let max_thread_id = Cell::new(0);
+        Self { handle, rng, max_thread_id }
     }
 
     pub fn print_genmc_graph(&self) {
@@ -471,6 +496,8 @@ impl GenmcCtx {
         rhs_scalar: Scalar,
         ordering: AtomicRwOrd,
     ) -> Result<Scalar, ()> {
+        // TODO GENMC: could maybe merge this with atomic_rmw?
+
         let (load_ordering, store_ordering) = ordering.into();
         let genmc_rmw_op = RmwBinOp::Xchg;
         tracing::info!(
@@ -618,7 +645,7 @@ impl GenmcCtx {
     ) -> Result<(), ()> {
         let curr_thread = machine.threads.active_thread().to_u32();
         info!(
-            "GenMC: memory deallocation, thread: {curr_thread}, address: 0x{address:?}, size: {size:?}, align: {align:?}, memory_kind: {kind:?}"
+            "GenMC: memory deallocation, thread: {curr_thread}, address: {address:?}, size: {size:?}, align: {align:?}, memory_kind: {kind:?}"
         );
 
         let genmc_address = size_to_genmc(address);
@@ -702,28 +729,93 @@ impl GenmcCtx {
         &self,
         thread_manager: &ThreadManager<'tcx>,
     ) -> Result<ThreadId, ()> {
-        // TODO GENMC
-        info!("GenMC: TODO GENMC: ask who to schedule next");
+        let mut max_thread_id = self.max_thread_id.get();
 
-        let mut threads = Threads::new();
+        // TODO GENMC: improve performance, e.g., with SmallVec
+        let mut threads_state: Vec<ThreadState> =
+            Vec::with_capacity(max_thread_id.try_into().unwrap());
+
+        let mut enabled_count = 0;
+        for (thread_id, thread) in thread_manager.threads_ref().iter_enumerated() {
+            max_thread_id = max_thread_id.max(thread_id.to_u32());
+            let thread_id_usize = thread_id.to_u32().try_into().unwrap();
+            assert!(threads_state.len() <= thread_id_usize);
+            while threads_state.len() < thread_id_usize {
+                threads_state.push(ThreadState::Terminated);
+            }
+            // If a thread is finished, there might still be something to do (see `src/concurrency/thread.rs`: `run_on_stack_empty`)
+            // In that case, the thread is still enabled, but has an empty stack
+            // We don't want to run this thread in GenMC mode (especially not the main thread, which terminates the program once it's done)
+            // We tell GenMC that this thread is disabled
+            let is_enabled = thread.get_state().is_enabled();
+            let is_finished = thread.top_user_relevant_frame().is_none();
+            threads_state.push(match (is_enabled, is_finished) {
+                (true, false) => {
+                    enabled_count += 1;
+                    ThreadState::Enabled
+                }
+                (true, true) => ThreadState::StackEmpty,
+                (false, true) => ThreadState::Terminated,
+                (false, false) => ThreadState::Blocked,
+            })
+        }
+        // Once there are no threads with non-empty stacks anymore, we allow scheduling threads with empty stacks:
+        if enabled_count == 0 {
+            for thread_state in threads_state.iter_mut().rev() {
+                if ThreadState::StackEmpty == *thread_state {
+                    *thread_state = ThreadState::Enabled;
+                    enabled_count += 1;
+                    break;
+                }
+            }
+            assert_ne!(0, enabled_count);
+        }
+        // TODO GENMC (OPTIMIZATION): could possibly skip scheduling call if we only have 1 enabled thread
+
+        // To make sure we are not missing any threads (and since GenMC will index into this vec), we add them as `blocked`
+        let old_len = threads_state.len();
+        threads_state.resize((max_thread_id + 1).try_into().unwrap(), ThreadState::Blocked);
+        info!(
+            "GenMC: schedule_thread: resizing threads_state: {old_len} --> {} (max_thread_id: {max_thread_id}, old: {}), threads_state: {threads_state:?}",
+            threads_state.len(),
+            self.max_thread_id.get()
+        );
+        assert!(old_len <= threads_state.len());
+        assert!(self.max_thread_id.get() <= max_thread_id);
+        self.max_thread_id.set(max_thread_id);
+        assert_eq!(self.max_thread_id.get(), max_thread_id);
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
-        pinned_mc.scheduleNext(&mut threads);
-
-        let enabled_thread_count = thread_manager.get_enabled_thread_count();
-        let mut i = self.rng.borrow_mut().random_range(0..enabled_thread_count);
-        for (thread_id, thread) in thread_manager.threads_ref().iter_enumerated() {
-            if !thread.get_state().is_enabled() {
-                continue;
-            }
-            if i != 0 {
-                i -= 1;
-                continue;
-            }
-            return Ok(thread_id);
+        let result = pinned_mc.scheduleNext(&threads_state);
+        if let Ok(next_thread) = u32::try_from(result) {
+            // TODO GENMC: can we ensure this thread_id is valid?
+            info!(
+                "GenMC: next thread to run is {next_thread}, total {} threads (max thread id: {max_thread_id})",
+                threads_state.len()
+            );
+            assert!(usize::try_from(next_thread).unwrap() < threads_state.len());
+            assert!(threads_state[usize::try_from(next_thread).unwrap()] == ThreadState::Enabled);
+            let next_thread = ThreadId::new_unchecked(next_thread);
+            Ok(next_thread)
+        } else {
+            // Negative result means there is no next thread to schedule
+            unimplemented!();
         }
-        unreachable!()
+
+        // let enabled_thread_count = thread_manager.get_enabled_thread_count();
+        // let mut i = self.rng.borrow_mut().random_range(0..enabled_thread_count);
+        // for (thread_id, thread) in thread_manager.threads_ref().iter_enumerated() {
+        //     if !thread.get_state().is_enabled() {
+        //         continue;
+        //     }
+        //     if i != 0 {
+        //         i -= 1;
+        //         continue;
+        //     }
+        //     return Ok(thread_id);
+        // }
+        // unreachable!()
     }
 }
 
