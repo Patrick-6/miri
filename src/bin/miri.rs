@@ -659,8 +659,16 @@ fn main() {
             miri_config.data_race_detector = false;
             miri_config.weak_memory_emulation = false;
         } else if let Some(param) = arg.strip_prefix("-Zmiri-genmc-print-graph=") {
+            // TODO GENMC (DOCUMENTATION)
             if let Some(genmc_config) = &mut miri_config.genmc_config {
                 genmc_config.set_graph_printing(param);
+            } else {
+                todo!("Handle GenMC arguments in wrong order");
+            }
+        } else if arg == "-Zmiri-genmc-disable-race-detection" {
+            // TODO GENMC (DOCUMENTATION)
+            if let Some(genmc_config) = &mut miri_config.genmc_config {
+                genmc_config.params.disable_race_detection = true;
             } else {
                 todo!("Handle GenMC arguments in wrong order");
             }
