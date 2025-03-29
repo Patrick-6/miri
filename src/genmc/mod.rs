@@ -442,15 +442,13 @@ impl GenmcCtx {
         address: Size,
         size: Size,
     ) -> Result<(), ()> {
-        info!(
-            "GenMC: TODO GENMC: SKIP! received memory_load (non-atomic): address: {address:?}, size: {size:?}",
-        );
+        info!("GenMC: received memory_load (non-atomic): address: {address:?}, size: {size:?}",);
         // GenMC doesn't like ZSTs, and they can't have any data races, so we skip them
         if size.bytes() == 0 {
             return Ok(());
         }
-        let _ = machine;
-        // self.atomic_load_impl(address, size, MemoryOrdering::NotAtomic) // TODO GENMC
+        let _read_scalar =
+            self.atomic_load_impl(machine, address, size, MemoryOrdering::NotAtomic)?;
         Ok(())
     }
 
@@ -461,16 +459,13 @@ impl GenmcCtx {
         size: Size,
         // value: crate::Scalar,
     ) -> Result<(), ()> {
-        info!(
-            "GenMC: TODO GENMC: SKIP! received memory_store (non-atomic): address: {address:?}, size: {size:?}"
-        );
+        info!("GenMC: received memory_store (non-atomic): address: {address:?}, size: {size:?}");
         // GenMC doesn't like ZSTs, and they can't have any data races, so we skip them
         if size.bytes() == 0 {
             return Ok(());
         }
-        let _ = machine;
-        // self.atomic_store_impl(address, size, value_genmc, MemoryOrdering::NotAtomic) // TODO GENMC
-        Ok(())
+        let dummy_scalar = Scalar::from_u64(0xDEADBEEF);
+        self.atomic_store_impl(machine, address, size, dummy_scalar, MemoryOrdering::NotAtomic)
     }
 
     /**** Memory (de)allocation ****/
@@ -484,19 +479,24 @@ impl GenmcCtx {
         let thread_infos = self.thread_infos.borrow();
         let curr_thread = machine.threads.active_thread();
         let genmc_tid = thread_infos.get_info(curr_thread).genmc_tid;
-        info!(
-            "GenMC: handle_alloc (thread: {curr_thread:?} ({genmc_tid:?}), size: {size:?}, alignment: {alignment:?})"
-        );
-        // kind: MemoryKind, TODO GENMC: Does GenMC care about the kind of Memory?
-
         // GenMC doesn't support ZSTs, so we set the minimum size to 1 byte
         let genmc_size = size_to_genmc(size).max(1);
+        info!(
+            "GenMC: handle_alloc (thread: {curr_thread:?} ({genmc_tid:?}), size: {size:?} (genmc size: {genmc_size} bytes), alignment: {alignment:?})"
+        );
+        // kind: MemoryKind, TODO GENMC: Does GenMC care about the kind of Memory?
 
         let alignment = alignment.bytes_usize();
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
         let genmc_address = pinned_mc.handleMalloc(genmc_tid.0, genmc_size, alignment);
+        info!("GenMC: handle_alloc: got address '{genmc_address}' (0x{genmc_address:x})");
+
+        // TODO GENMC:
+        if genmc_address == 0 {
+            return Err(());
+        }
 
         let chosen_address = to_miri_size(genmc_address);
         let chosen_address = chosen_address.bytes();
@@ -721,8 +721,12 @@ impl GenmcCtx {
         let read_value =
             pinned_mc.handleLoad(genmc_tid.0, genmc_address, genmc_size, memory_ordering);
 
-        let read_scalar = genmc_scalar_to_scalar(read_value, size);
-        Ok(read_scalar)
+        Ok(if memory_ordering == MemoryOrdering::NotAtomic {
+            // TODO GENMC (HACK): to handle large non-atomics, we ignore the value by GenMC for now
+            Scalar::from_u64(0xDEADBEEF)
+        } else {
+            genmc_scalar_to_scalar(read_value, size)
+        })
     }
 
     fn atomic_store_impl<'tcx>(
