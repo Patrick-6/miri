@@ -162,7 +162,9 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
         // TODO GENMC: document why this is here (because address of allocation not known in `init_alloc_extra`)
         // TODO GENMC: `this` is not mutably borrowed here, so we can't mutably borrow the `concurrency_handler`, need to rethink this (maybe change the function signature)
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-            let addr = genmc_ctx.handle_alloc(&this.machine, info.size, info.align).unwrap(); // TODO GENMC: proper error handling
+            let Ok(addr) = genmc_ctx.handle_alloc(&this.machine, info.size, info.align) else {
+                throw_unsup_format!("TODO GENMC: proper error handling");
+            };
             debug!("addr_from_alloc_id_uncached: {alloc_id:?} --> {addr}");
             return interp_ok(addr);
         }
