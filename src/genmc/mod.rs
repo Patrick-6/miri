@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 #[allow(unused_imports)] // TODO GENMC: false warning?
 use std::pin::Pin;
 
@@ -6,60 +6,28 @@ use cxx::UniquePtr;
 use rand::prelude::*;
 use rand::rngs::StdRng;
 use rustc_abi::{Align, Size};
-use rustc_middle::ty::ScalarInt;
 use tracing::{info, warn};
 
 use self::ffi::{
     MemoryOrdering, MiriGenMCShim, RmwBinOp, StoreEventType, ThreadState, createGenmcHandle,
 };
+use self::helper::{Threads, genmc_scalar_to_scalar, scalar_to_genmc_scalar};
+use self::mapping::ToGenmcMemoryOrdering;
+use self::thread_info_manager::{GenmcThreadId, GenmcThreadIdInner, ThreadInfoManager};
 use crate::intrinsics::AtomicOp;
 use crate::{
     AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, MemoryKind, MiriMachine, Scalar,
     ThreadId, ThreadManager,
 };
 
+mod config;
 mod cxx_extra;
+mod helper;
+mod mapping;
+mod thread_info_manager;
 
+pub use self::config::{GenmcConfig, GenmcPrintGraphSetting};
 pub use self::ffi::GenmcParams;
-
-// TODO GENMC: document this:
-#[derive(Debug, Default, Clone)]
-pub struct GenmcConfig {
-    pub params: GenmcParams,
-    pub print_graph: GenmcPrintGraphSetting,
-}
-
-// TODO GENMC: document this:
-#[derive(Debug, Default, Clone, Copy)]
-pub enum GenmcPrintGraphSetting {
-    #[default]
-    None,
-    First,
-    All,
-}
-
-impl Default for GenmcParams {
-    fn default() -> Self {
-        Self {
-            memory_model: "RC11".into(),
-            quiet: true,
-            print_random_schedule_seed: false,
-            disable_race_detection: false,
-        }
-    }
-}
-
-impl GenmcConfig {
-    pub fn set_graph_printing(&mut self, param: &str) {
-        self.print_graph = match param {
-            "none" | "false" | "" => GenmcPrintGraphSetting::None,
-            "first" | "true" => GenmcPrintGraphSetting::First,
-            // TODO GENMC: are these graphs always the same? Would printing the last one make more sense?
-            "all" => GenmcPrintGraphSetting::All,
-            _ => todo!("Unsupported argument"),
-        }
-    }
-}
 
 // TODO GENMC: extract the ffi module if possible, to reduce number of required recompilation
 #[cxx::bridge]
@@ -153,14 +121,14 @@ mod ffi {
 
         fn handleLoad(
             self: Pin<&mut MiriGenMCShim>,
-            thread_id: u32,
+            thread_id: i32,
             address: usize,
             size: usize,
             memory_ordering: MemoryOrdering,
         ) -> u64; // TODO GENMC: modify this to allow for handling pointers and u128
         fn handleReadModifyWrite(
             self: Pin<&mut MiriGenMCShim>,
-            thread_id: u32,
+            thread_id: i32,
             address: usize,
             size: usize,
             load_ordering: MemoryOrdering,
@@ -170,7 +138,7 @@ mod ffi {
         ) -> u64; // TODO GENMC: modify this to allow for handling pointers and u128
         fn handleCompareExchange(
             self: Pin<&mut MiriGenMCShim>,
-            thread_id: u32,
+            thread_id: i32,
             address: usize,
             size: usize,
             expected_value: u64,
@@ -182,7 +150,7 @@ mod ffi {
         ) -> CompareExchangeResult;
         fn handleStore(
             self: Pin<&mut MiriGenMCShim>,
-            thread_id: u32,
+            thread_id: i32,
             address: usize,
             size: usize,
             value: u64,
@@ -192,22 +160,21 @@ mod ffi {
         );
         fn handleFence(
             self: Pin<&mut MiriGenMCShim>,
-            thread_id: u32,
+            thread_id: i32,
             memory_ordering: MemoryOrdering,
         );
 
         fn handleMalloc(
             self: Pin<&mut MiriGenMCShim>,
-            thread_id: u32,
+            thread_id: i32,
             size: usize,
             alignment: usize,
         ) -> usize;
-        fn handleFree(self: Pin<&mut MiriGenMCShim>, thread_id: u32, address: usize, size: usize);
+        fn handleFree(self: Pin<&mut MiriGenMCShim>, thread_id: i32, address: usize, size: usize);
 
-        // fn handleThreadKill(self: Pin<&mut MiriGenMCShim>, thread_id: u32, parent_id: u32);
-        fn handleThreadCreate(self: Pin<&mut MiriGenMCShim>, thread_id: u32, parent_id: u32);
-        fn handleThreadJoin(self: Pin<&mut MiriGenMCShim>, thread_id: u32, child_id: u32);
-        fn handleThreadFinish(self: Pin<&mut MiriGenMCShim>, thread_id: u32, ret_val: u64);
+        fn handleThreadCreate(self: Pin<&mut MiriGenMCShim>, thread_id: i32, parent_id: i32);
+        fn handleThreadJoin(self: Pin<&mut MiriGenMCShim>, thread_id: i32, child_id: i32);
+        fn handleThreadFinish(self: Pin<&mut MiriGenMCShim>, thread_id: i32, ret_val: u64);
 
         fn scheduleNext(self: Pin<&mut MiriGenMCShim>, thread_states: &[ThreadState]) -> i64;
         fn isHalting(self: &MiriGenMCShim) -> bool;
@@ -218,125 +185,15 @@ mod ffi {
     }
 }
 
-#[derive(Debug)]
-pub struct Threads {
-    // TODO
-    // inner: &ThreadManager
-}
-
-#[allow(unused)] // TODO GENMC: remove
-impl Threads {
-    pub fn new() -> Self {
-        Self {}
-    }
-
-    fn is_enabled(&self, thread_id: u32) -> bool {
-        // eprintln!("Threads::is_enabled({thread_id})");
-        true
-    }
-
-    fn set_next_thread(&mut self, thread_id: u32) {
-        eprintln!("Threads::set_next_thread({thread_id})");
-    }
-}
-
-trait ToGenmcMemoryOrdering {
-    fn convert(self) -> MemoryOrdering;
-}
-
-impl ToGenmcMemoryOrdering for AtomicReadOrd {
-    fn convert(self) -> MemoryOrdering {
-        match self {
-            AtomicReadOrd::Relaxed => MemoryOrdering::Relaxed,
-            AtomicReadOrd::Acquire => MemoryOrdering::Acquire,
-            AtomicReadOrd::SeqCst => MemoryOrdering::SequentiallyConsistent,
-        }
-    }
-}
-
-impl ToGenmcMemoryOrdering for AtomicWriteOrd {
-    fn convert(self) -> MemoryOrdering {
-        match self {
-            AtomicWriteOrd::Relaxed => MemoryOrdering::Relaxed,
-            AtomicWriteOrd::Release => MemoryOrdering::Release,
-            AtomicWriteOrd::SeqCst => MemoryOrdering::SequentiallyConsistent,
-        }
-    }
-}
-
-impl ToGenmcMemoryOrdering for AtomicFenceOrd {
-    fn convert(self) -> MemoryOrdering {
-        match self {
-            AtomicFenceOrd::Acquire => MemoryOrdering::Acquire,
-            AtomicFenceOrd::Release => MemoryOrdering::Release,
-            AtomicFenceOrd::AcqRel => MemoryOrdering::AcquireRelease,
-            AtomicFenceOrd::SeqCst => MemoryOrdering::SequentiallyConsistent,
-        }
-    }
-}
-
-// TODO: add methods for this conversion:
-
-impl From<AtomicRwOrd> for (MemoryOrdering, MemoryOrdering) {
-    fn from(value: AtomicRwOrd) -> Self {
-        match value {
-            // TODO GENMC: check if we need to implement Release ==> (Release, Release)
-            AtomicRwOrd::Relaxed => (MemoryOrdering::Relaxed, MemoryOrdering::Relaxed),
-            AtomicRwOrd::Acquire => (MemoryOrdering::Acquire, MemoryOrdering::Relaxed),
-            AtomicRwOrd::Release => (MemoryOrdering::Relaxed, MemoryOrdering::Release),
-            AtomicRwOrd::AcqRel => (MemoryOrdering::Acquire, MemoryOrdering::Release),
-            AtomicRwOrd::SeqCst =>
-                (MemoryOrdering::SequentiallyConsistent, MemoryOrdering::SequentiallyConsistent),
-        }
-    }
-}
-
-fn to_genmc_rmw_op(rmw_op: AtomicOp, is_unsigned: bool) -> RmwBinOp {
-    match (rmw_op, is_unsigned) {
-        (AtomicOp::Min, false) => RmwBinOp::Min, // TODO GENMC: is there a use for FMin? (Min, UMin, FMin)
-        (AtomicOp::Max, false) => RmwBinOp::Max,
-        (AtomicOp::Min, true) => RmwBinOp::UMin,
-        (AtomicOp::Max, true) => RmwBinOp::UMax,
-        (AtomicOp::MirOp(bin_op, negate), _) =>
-            match bin_op {
-                rustc_middle::mir::BinOp::Add => RmwBinOp::Add,
-                rustc_middle::mir::BinOp::Sub => RmwBinOp::Sub,
-                rustc_middle::mir::BinOp::BitOr if !negate => RmwBinOp::Or,
-                rustc_middle::mir::BinOp::BitXor if !negate => RmwBinOp::Xor,
-                rustc_middle::mir::BinOp::BitAnd if negate => RmwBinOp::Nand,
-                rustc_middle::mir::BinOp::BitAnd => RmwBinOp::And,
-                _ => {
-                    panic!("unsupported atomic operation: bin_op: {bin_op:?}, negate: {negate}");
-                }
-            },
-    }
-}
-
 pub struct GenmcCtx {
     // TODO GENMC: remove this Mutex if possible
     handle: RefCell<UniquePtr<MiriGenMCShim>>,
 
     #[allow(unused)] // TODO GENMC (CLEANUP)
-    pub(crate) rng: RefCell<StdRng>, // TODO GENMC: temporary rng for handling scheduling
+    rng: RefCell<StdRng>, // TODO GENMC: temporary rng for handling scheduling
 
-    max_thread_id: Cell<u32>,
-}
-
-fn scalar_to_genmc_scalar(value: Scalar) -> u64 {
-    // TODO GENMC: proper handling of `Scalar`
-    match value {
-        rustc_const_eval::interpret::Scalar::Int(scalar_int) =>
-            scalar_int.to_uint(scalar_int.size()).try_into().unwrap(), // TODO GENMC: doesn't work for size != 8
-        rustc_const_eval::interpret::Scalar::Ptr(_pointer, _size) => todo!(), // pointer.into_parts().1.bytes(),
-    }
-}
-
-fn genmc_scalar_to_scalar(value: u64, size: Size) -> Scalar {
-    // TODO GENMC: proper handling of large integers
-    // TODO GENMC: proper handling of pointers (currently assumes all integers)
-
-    let value_scalar_int = ScalarInt::try_from_uint(value, size).unwrap();
-    Scalar::Int(value_scalar_int)
+    // TODO GENMC (PERFORMANCE): could use one RefCell for all internals instead of multiple
+    thread_infos: RefCell<ThreadInfoManager>,
 }
 
 /// Convert an address selected by GenMC into Miri's type for addresses.
@@ -372,8 +229,10 @@ impl GenmcCtx {
 
         let seed = 0;
         let rng = RefCell::new(StdRng::seed_from_u64(seed));
-        let max_thread_id = Cell::new(0);
-        Self { handle, rng, max_thread_id }
+
+        let thread_infos = RefCell::new(ThreadInfoManager::new());
+
+        Self { handle, rng, thread_infos }
     }
 
     pub fn print_genmc_graph(&self) {
@@ -408,6 +267,8 @@ impl GenmcCtx {
 
     pub(crate) fn handle_execution_start(&self) {
         info!("GenMC: inform GenMC that new execution started");
+        self.thread_infos.borrow_mut().reset();
+
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
         pinned_mc.handleExecutionStart();
@@ -453,11 +314,14 @@ impl GenmcCtx {
         info!("GenMC: atomic_fence with ordering: {ordering:?}");
 
         let ordering = ordering.convert();
-        let curr_thread = machine.threads.active_thread().to_u32();
+
+        let thread_infos = self.thread_infos.borrow();
+        let curr_thread = machine.threads.active_thread();
+        let genmc_tid = thread_infos.get_info(curr_thread).genmc_tid;
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
-        pinned_mc.handleFence(curr_thread, ordering);
+        pinned_mc.handleFence(genmc_tid.0, ordering);
 
         Ok(())
     }
@@ -472,8 +336,8 @@ impl GenmcCtx {
         rhs_scalar: Scalar,
         is_unsigned: bool,
     ) -> Result<Scalar, ()> {
-        let (load_ordering, store_ordering) = ordering.into();
-        let genmc_rmw_op = to_genmc_rmw_op(rmw_op, is_unsigned);
+        let (load_ordering, store_ordering) = ordering.to_genmc_memory_orderings();
+        let genmc_rmw_op = rmw_op.to_genmc_rmw_op(is_unsigned);
         tracing::info!(
             "GenMC: atomic_rmw_op (op: {genmc_rmw_op:?}): rhs value: {rhs_scalar:?}, is_unsigned: {is_unsigned}, orderings ({load_ordering:?}, {store_ordering:?})"
         );
@@ -498,7 +362,7 @@ impl GenmcCtx {
     ) -> Result<Scalar, ()> {
         // TODO GENMC: could maybe merge this with atomic_rmw?
 
-        let (load_ordering, store_ordering) = ordering.into();
+        let (load_ordering, store_ordering) = ordering.to_genmc_memory_orderings();
         let genmc_rmw_op = RmwBinOp::Xchg;
         tracing::info!(
             "GenMC: atomic_exchange (op: {genmc_rmw_op:?}): new value: {rhs_scalar:?}, orderings ({load_ordering:?}, {store_ordering:?})"
@@ -525,7 +389,7 @@ impl GenmcCtx {
         fail: AtomicReadOrd,
         can_fail_spuriously: bool,
     ) -> Result<(Scalar, bool), ()> {
-        let (success_load_ordering, success_store_ordering) = success.into();
+        let (success_load_ordering, success_store_ordering) = success.to_genmc_memory_orderings();
         let fail_load_ordering = fail.convert();
 
         info!(
@@ -541,7 +405,10 @@ impl GenmcCtx {
             );
         }
 
-        let curr_thread = machine.threads.active_thread().to_u32();
+        let thread_infos = self.thread_infos.borrow();
+        let curr_thread = machine.threads.active_thread();
+        let genmc_tid = thread_infos.get_info(curr_thread).genmc_tid;
+
         let genmc_address = size_to_genmc(address);
         let genmc_size = size_to_genmc(size);
 
@@ -551,7 +418,7 @@ impl GenmcCtx {
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
         let result = pinned_mc.handleCompareExchange(
-            curr_thread,
+            genmc_tid.0,
             genmc_address,
             genmc_size,
             genmc_expected_value,
@@ -575,15 +442,14 @@ impl GenmcCtx {
         address: Size,
         size: Size,
     ) -> Result<(), ()> {
-        let curr_thread = machine.threads.active_thread().to_u32();
         info!(
-            "GenMC: TODO GENMC: SKIP! received memory_load (non-atomic): thread: {curr_thread}, address: {address:?}, size: {size:?}, thread_id: {:?}",
-            machine.threads.active_thread(),
+            "GenMC: TODO GENMC: SKIP! received memory_load (non-atomic): address: {address:?}, size: {size:?}",
         );
         // GenMC doesn't like ZSTs, and they can't have any data races, so we skip them
         if size.bytes() == 0 {
             return Ok(());
         }
+        let _ = machine;
         // self.atomic_load_impl(address, size, MemoryOrdering::NotAtomic) // TODO GENMC
         Ok(())
     }
@@ -595,14 +461,14 @@ impl GenmcCtx {
         size: Size,
         // value: crate::Scalar,
     ) -> Result<(), ()> {
-        let curr_thread = machine.threads.active_thread().to_u32();
         info!(
-            "GenMC: TODO GENMC: SKIP! received memory_store (non-atomic): thread: {curr_thread}, address: {address:?}, size: {size:?}"
+            "GenMC: TODO GENMC: SKIP! received memory_store (non-atomic): address: {address:?}, size: {size:?}"
         );
         // GenMC doesn't like ZSTs, and they can't have any data races, so we skip them
         if size.bytes() == 0 {
             return Ok(());
         }
+        let _ = machine;
         // self.atomic_store_impl(address, size, value_genmc, MemoryOrdering::NotAtomic) // TODO GENMC
         Ok(())
     }
@@ -615,9 +481,11 @@ impl GenmcCtx {
         size: Size,
         alignment: Align,
     ) -> Result<u64, ()> {
-        let curr_thread = machine.threads.active_thread().to_u32();
+        let thread_infos = self.thread_infos.borrow();
+        let curr_thread = machine.threads.active_thread();
+        let genmc_tid = thread_infos.get_info(curr_thread).genmc_tid;
         info!(
-            "GenMC: handle_alloc (thread: {curr_thread}, size: {size:?}, alignment: {alignment:?})"
+            "GenMC: handle_alloc (thread: {curr_thread:?} ({genmc_tid:?}), size: {size:?}, alignment: {alignment:?})"
         );
         // kind: MemoryKind, TODO GENMC: Does GenMC care about the kind of Memory?
 
@@ -628,7 +496,7 @@ impl GenmcCtx {
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
-        let genmc_address = pinned_mc.handleMalloc(curr_thread, genmc_size, alignment);
+        let genmc_address = pinned_mc.handleMalloc(genmc_tid.0, genmc_size, alignment);
 
         let chosen_address = to_miri_size(genmc_address);
         let chosen_address = chosen_address.bytes();
@@ -643,9 +511,11 @@ impl GenmcCtx {
         align: Align,
         kind: MemoryKind,
     ) -> Result<(), ()> {
-        let curr_thread = machine.threads.active_thread().to_u32();
+        let thread_infos = self.thread_infos.borrow();
+        let curr_thread = machine.threads.active_thread();
+        let genmc_tid = thread_infos.get_info(curr_thread).genmc_tid;
         info!(
-            "GenMC: memory deallocation, thread: {curr_thread}, address: {address:?}, size: {size:?}, align: {align:?}, memory_kind: {kind:?}"
+            "GenMC: memory deallocation, thread: {curr_thread:?} ({genmc_tid:?}), address: {address:?}, size: {size:?}, align: {align:?}, memory_kind: {kind:?}"
         );
 
         let genmc_address = size_to_genmc(address);
@@ -654,7 +524,7 @@ impl GenmcCtx {
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
-        pinned_mc.handleFree(curr_thread, genmc_address, genmc_size);
+        pinned_mc.handleFree(genmc_tid.0, genmc_address, genmc_size);
 
         Ok(())
     }
@@ -666,16 +536,19 @@ impl GenmcCtx {
         threads: &ThreadManager<'tcx>,
         new_thread_id: ThreadId,
     ) -> Result<(), ()> {
-        let new_thread_id = new_thread_id.to_u32();
-        let parent_thread_id = threads.active_thread().to_u32();
+        let mut thread_infos = self.thread_infos.borrow_mut();
+
+        let curr_thread_id = threads.active_thread();
+        let genmc_parent_tid = thread_infos.get_info(curr_thread_id).genmc_tid;
+        let genmc_new_tid = thread_infos.add_thread(new_thread_id);
 
         info!(
-            "GenMC: handling thread creation (thread {parent_thread_id} spawned thread {new_thread_id})"
+            "GenMC: handling thread creation (thread {curr_thread_id:?} ({genmc_parent_tid:?}) spawned thread {new_thread_id:?} ({genmc_new_tid:?}))"
         );
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
-        pinned_mc.handleThreadCreate(new_thread_id, parent_thread_id);
+        pinned_mc.handleThreadCreate(genmc_new_tid.0, genmc_parent_tid.0);
 
         Ok(())
     }
@@ -687,16 +560,18 @@ impl GenmcCtx {
         active_thread_id: ThreadId,
         child_thread_id: ThreadId,
     ) -> Result<(), ()> {
-        let curr_thread_id = active_thread_id.to_u32();
-        let child_thread_id = child_thread_id.to_u32();
+        let thread_infos = self.thread_infos.borrow();
+
+        let genmc_curr_tid = thread_infos.get_info(active_thread_id).genmc_tid;
+        let genmc_child_tid = thread_infos.get_info(child_thread_id).genmc_tid;
 
         info!(
-            "GenMC: handling thread joining (thread {curr_thread_id} joining thread {child_thread_id})"
+            "GenMC: handling thread joining (thread {active_thread_id:?} ({genmc_curr_tid:?}) joining thread {child_thread_id:?} ({genmc_child_tid:?}))"
         );
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
-        pinned_mc.handleThreadJoin(curr_thread_id, child_thread_id);
+        pinned_mc.handleThreadJoin(genmc_curr_tid.0, genmc_child_tid.0);
 
         Ok(())
     }
@@ -705,21 +580,33 @@ impl GenmcCtx {
         &self,
         threads: &ThreadManager<'tcx>,
     ) -> Result<(), ()> {
-        let curr_thread_id = threads.active_thread().to_u32();
+        let thread_infos = self.thread_infos.borrow();
+        let curr_thread_id = threads.active_thread();
+        let genmc_tid = thread_infos.get_info(curr_thread_id).genmc_tid;
 
         // NOTE: Miri doesn't support return values for threads, but GenMC expects one, so we return 0
         let ret_val = 0;
 
-        info!("GenMC: handling thread finish (thread {curr_thread_id} returns with dummy value 0)");
+        info!(
+            "GenMC: handling thread finish (thread {curr_thread_id:?} ({genmc_tid:?}) returns with dummy value 0)"
+        );
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
-        pinned_mc.handleThreadFinish(curr_thread_id, ret_val);
+        pinned_mc.handleThreadFinish(genmc_tid.0, ret_val);
 
         Ok(())
     }
 
-    /**** Scheduling queries ****/
+    /**** Scheduling functionality ****/
+
+    // TODO GENMC: what is the correct name here?
+    // TODO GENMC: does this also need to happen on other threads?
+    pub(crate) fn thread_stack_empty(&self, thread_id: ThreadId) {
+        info!("GenMC: thread {thread_id:?} finished");
+        let mut thread_infos = self.thread_infos.borrow_mut();
+        thread_infos.get_info_mut(thread_id).user_code_finished = true;
+    }
 
     pub(crate) fn should_preempt(&self) -> bool {
         true // TODO GENMC
@@ -729,27 +616,26 @@ impl GenmcCtx {
         &self,
         thread_manager: &ThreadManager<'tcx>,
     ) -> Result<ThreadId, ()> {
-        let mut max_thread_id = self.max_thread_id.get();
+        let thread_infos = self.thread_infos.borrow();
+        let thread_count = thread_infos.thread_count();
 
         // TODO GENMC: improve performance, e.g., with SmallVec
-        let mut threads_state: Vec<ThreadState> =
-            Vec::with_capacity(max_thread_id.try_into().unwrap());
+        let mut threads_state: Vec<ThreadState> = vec![ThreadState::Terminated; thread_count];
 
         let mut enabled_count = 0;
         for (thread_id, thread) in thread_manager.threads_ref().iter_enumerated() {
-            max_thread_id = max_thread_id.max(thread_id.to_u32());
-            let thread_id_usize = thread_id.to_u32().try_into().unwrap();
-            assert!(threads_state.len() <= thread_id_usize);
-            while threads_state.len() < thread_id_usize {
-                threads_state.push(ThreadState::Terminated);
-            }
             // If a thread is finished, there might still be something to do (see `src/concurrency/thread.rs`: `run_on_stack_empty`)
             // In that case, the thread is still enabled, but has an empty stack
             // We don't want to run this thread in GenMC mode (especially not the main thread, which terminates the program once it's done)
             // We tell GenMC that this thread is disabled
             let is_enabled = thread.get_state().is_enabled();
-            let is_finished = thread.top_user_relevant_frame().is_none();
-            threads_state.push(match (is_enabled, is_finished) {
+            // TODO GENMC:
+            // let is_finished = thread.top_user_relevant_frame().is_none();
+            // let user_code_finished = thread_infos.get_info(thread_id).user_code_finished;
+            let thread_info = thread_infos.get_info(thread_id);
+            let user_code_finished = thread_info.user_code_finished;
+            let index = usize::try_from(thread_info.genmc_tid.0).unwrap();
+            threads_state[index] = match (is_enabled, user_code_finished) {
                 (true, false) => {
                     enabled_count += 1;
                     ThreadState::Enabled
@@ -757,9 +643,10 @@ impl GenmcCtx {
                 (true, true) => ThreadState::StackEmpty,
                 (false, true) => ThreadState::Terminated,
                 (false, false) => ThreadState::Blocked,
-            })
+            };
         }
         // Once there are no threads with non-empty stacks anymore, we allow scheduling threads with empty stacks:
+        // TODO GENMC: decide if this can only happen for the main thread:
         if enabled_count == 0 {
             for thread_state in threads_state.iter_mut().rev() {
                 if ThreadState::StackEmpty == *thread_state {
@@ -770,34 +657,24 @@ impl GenmcCtx {
             }
             assert_ne!(0, enabled_count);
         }
-        // TODO GENMC (OPTIMIZATION): could possibly skip scheduling call if we only have 1 enabled thread
-
-        // To make sure we are not missing any threads (and since GenMC will index into this vec), we add them as `blocked`
-        let old_len = threads_state.len();
-        threads_state.resize((max_thread_id + 1).try_into().unwrap(), ThreadState::Blocked);
-        info!(
-            "GenMC: schedule_thread: resizing threads_state: {old_len} --> {} (max_thread_id: {max_thread_id}, old: {}), threads_state: {threads_state:?}",
-            threads_state.len(),
-            self.max_thread_id.get()
-        );
-        assert!(old_len <= threads_state.len());
-        assert!(self.max_thread_id.get() <= max_thread_id);
-        self.max_thread_id.set(max_thread_id);
-        assert_eq!(self.max_thread_id.get(), max_thread_id);
+        // TODO GENMC (OPTIMIZATION): could possibly skip scheduling call to GenMC if we only have 1 enabled thread
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
         let result = pinned_mc.scheduleNext(&threads_state);
-        if let Ok(next_thread) = u32::try_from(result) {
+        if let Ok(genmc_next_thread_id) = GenmcThreadIdInner::try_from(result) {
+            assert_eq!(
+                threads_state.get(usize::try_from(genmc_next_thread_id).unwrap()),
+                Some(&ThreadState::Enabled)
+            );
             // TODO GENMC: can we ensure this thread_id is valid?
+            let genmc_next_thread_id = GenmcThreadId(genmc_next_thread_id);
+            let next_thread_id = thread_infos.get_info_genmc(genmc_next_thread_id).miri_tid;
             info!(
-                "GenMC: next thread to run is {next_thread}, total {} threads (max thread id: {max_thread_id})",
+                "GenMC: next thread to run is {next_thread_id:?} ({genmc_next_thread_id:?}), total {} threads",
                 threads_state.len()
             );
-            assert!(usize::try_from(next_thread).unwrap() < threads_state.len());
-            assert!(threads_state[usize::try_from(next_thread).unwrap()] == ThreadState::Enabled);
-            let next_thread = ThreadId::new_unchecked(next_thread);
-            Ok(next_thread)
+            Ok(next_thread_id)
         } else {
             // Negative result means there is no next thread to schedule
             unimplemented!();
@@ -829,9 +706,12 @@ impl GenmcCtx {
         memory_ordering: MemoryOrdering,
     ) -> Result<Scalar, ()> {
         assert_ne!(0, size.bytes());
-        let curr_thread = machine.threads.active_thread().to_u32();
+        let thread_infos = self.thread_infos.borrow();
+        let curr_thread_id = machine.threads.active_thread();
+        let genmc_tid = thread_infos.get_info(curr_thread_id).genmc_tid;
+
         info!(
-            "GenMC: load, thread: {curr_thread}, address: {address:?}, size: {size:?}, ordering: {memory_ordering:?}"
+            "GenMC: load, thread: {curr_thread_id:?} ({genmc_tid:?}), address: {address:?}, size: {size:?}, ordering: {memory_ordering:?}"
         );
         let genmc_address = size_to_genmc(address);
         let genmc_size = size_to_genmc(size);
@@ -839,7 +719,7 @@ impl GenmcCtx {
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
         let read_value =
-            pinned_mc.handleLoad(curr_thread, genmc_address, genmc_size, memory_ordering);
+            pinned_mc.handleLoad(genmc_tid.0, genmc_address, genmc_size, memory_ordering);
 
         let read_scalar = genmc_scalar_to_scalar(read_value, size);
         Ok(read_scalar)
@@ -854,20 +734,22 @@ impl GenmcCtx {
         memory_ordering: MemoryOrdering,
     ) -> Result<(), ()> {
         assert_ne!(0, size.bytes());
-        let curr_thread = machine.threads.active_thread().to_u32();
+        let thread_infos = self.thread_infos.borrow();
+        let curr_thread_id = machine.threads.active_thread();
+        let genmc_tid = thread_infos.get_info(curr_thread_id).genmc_tid;
 
         let genmc_value = scalar_to_genmc_scalar(value);
         let genmc_address = size_to_genmc(address);
         let genmc_size = size_to_genmc(size);
 
         info!(
-            "GenMC: store, thread: {curr_thread}, address: {address:?}, size: {size:?}, ordering {memory_ordering:?}, value: {value:?}"
+            "GenMC: store, thread: {curr_thread_id:?} ({genmc_tid:?}), address: {address:?}, size: {size:?}, ordering {memory_ordering:?}, value: {value:?}"
         );
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
         pinned_mc.handleStore(
-            curr_thread,
+            genmc_tid.0,
             genmc_address,
             genmc_size,
             genmc_value,
@@ -889,12 +771,15 @@ impl GenmcCtx {
         rhs_scalar: Scalar,
     ) -> Result<Scalar, ()> {
         assert_ne!(0, size.bytes());
-        let curr_thread = machine.threads.active_thread().to_u32();
+        let thread_infos = self.thread_infos.borrow();
+        let curr_thread_id = machine.threads.active_thread();
+        let genmc_tid = thread_infos.get_info(curr_thread_id).genmc_tid;
+
         let genmc_address = size_to_genmc(address);
         let genmc_size = size_to_genmc(size);
 
         info!(
-            "GenMC: atomic_rmw_op (op: {genmc_rmw_op:?}, rhs value: {rhs_scalar:?}), thread: {curr_thread}, address: {address:?}, size: {size:?}, orderings: ({load_ordering:?}, {store_ordering:?})",
+            "GenMC: atomic_rmw_op, thread: {curr_thread_id:?} ({genmc_tid:?}) (op: {genmc_rmw_op:?}, rhs value: {rhs_scalar:?}), address: {address:?}, size: {size:?}, orderings: ({load_ordering:?}, {store_ordering:?})",
         );
 
         let genmc_rhs = scalar_to_genmc_scalar(rhs_scalar);
@@ -902,7 +787,7 @@ impl GenmcCtx {
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
         let old_value = pinned_mc.handleReadModifyWrite(
-            curr_thread,
+            genmc_tid.0,
             genmc_address,
             genmc_size,
             load_ordering,
@@ -920,6 +805,7 @@ impl std::fmt::Debug for GenmcCtx {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GenmcCtx")
             // .field("mc", &self.mc)
+            .field("thread_infos", &self.thread_infos)
             .finish_non_exhaustive()
     }
 }
