@@ -227,6 +227,12 @@ impl<'tcx> MainThreadState<'tcx> {
         this: &mut MiriInterpCx<'tcx>,
     ) -> InterpResult<'tcx, Poll<()>> {
         use MainThreadState::*;
+        // TODO GENMC: does this also need to happen on other threads?
+        if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
+            let thread_id = this.active_thread();
+            // TODO GENMC: thread_id should always be ThreadId::MAIN_THREAD here
+            genmc_ctx.thread_stack_empty(thread_id);
+        }
         match self {
             Running => {
                 *self = TlsDtors(Default::default());
