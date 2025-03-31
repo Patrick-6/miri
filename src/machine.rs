@@ -902,15 +902,26 @@ impl<'tcx> MiriMachine<'tcx> {
             .map(|bt| bt.borrow_mut().new_allocation(id, size, kind, &ecx.machine));
 
         // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
-        let data_race = ecx.machine.concurrency_handler.as_data_race_ref().map(|data_race| {
-            data_race::AllocState::new_allocation(
-                data_race,
-                &ecx.machine.threads,
-                size,
-                kind,
-                ecx.machine.current_span(),
-            )
-        });
+        let data_race = match &ecx.machine.concurrency_handler {
+            ConcurrencyHandler::None => None,
+            ConcurrencyHandler::DataRace(data_race) =>
+                Some(data_race::AllocState::new_allocation(
+                    data_race,
+                    &ecx.machine.threads,
+                    size,
+                    kind,
+                    ecx.machine.current_span(),
+                )),
+            ConcurrencyHandler::GenMC(genmc_ctx) => {
+                info!(
+                    "GenMC: TODO GENMC: init_allocation: check if something needs to be done here for GenMC"
+                );
+                let _ = genmc_ctx;
+                // let address = todo!();
+                genmc_ctx.init_allocation(&ecx.machine, size, align, kind);
+                None
+            }
+        };
         let weak_memory = ecx.machine.weak_memory.then(weak_memory::AllocState::new_allocation);
 
         // If an allocation is leaked, we want to report a backtrace to indicate where it was
@@ -1331,6 +1342,10 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         size: Size,
         align: Align,
     ) -> InterpResult<'tcx, Self::AllocExtra> {
+        info!(
+            "GenMC: TODO GENMC: init_local_allocation: id: {id:?}, kind: {kind:?}, size: {size:?}, align: {align:?}"
+        );
+
         assert!(kind != MiriMemoryKind::Global.into());
         MiriMachine::init_allocation(ecx, id, kind, size, align)
     }
@@ -1422,8 +1437,8 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         alloc: &'b Allocation,
     ) -> InterpResult<'tcx, Cow<'b, Allocation<Self::Provenance, Self::AllocExtra, Self::Bytes>>>
     {
-        tracing::info!(
-            "GenMC: TODO GENMC: DEBUG: adjust_global_allocation called, do we need to inform GenMC about this?"
+        info!(
+            "GenMC: adjust_global_allocation (TODO GENMC): id: {id:?} ==> Maybe tell GenMC about initial value here?"
         );
 
         let alloc = alloc.adjust_from_tcx(
@@ -1456,12 +1471,10 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         if let Some(genmc_ctx) = machine.concurrency_handler.as_genmc_ref() {
             // TODO GENMC: should GenMC be informed about pending memory read? (Might help for scheduling if other thread should run first according to GenMC)
 
-            let is_constant: bool = todo!();
-            if !is_constant {
-                let address = ptr.addr();
-                genmc_ctx.memory_load(machine, address, range.size).unwrap(); // TODO GENMC proper error handling
-                return interp_ok(());
-            }
+            let address = ptr.addr();
+            info!("GenMC: before memory load: alloc_id: {alloc_id:?}");
+            genmc_ctx.memory_load(machine, address, range.size)?; // NOTE: We throw away the value we get from GenMC (TODO GENMC)
+            return interp_ok(());
         }
 
         if let Some(data_race) = &alloc_extra.data_race {
@@ -1494,7 +1507,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         if let Some(genmc_ctx) = machine.concurrency_handler.as_genmc_ref() {
             // TODO GENMC: we don't give GenMC the written value here:
             let address = ptr.addr();
-            genmc_ctx.memory_store(machine, address, range.size).unwrap(); // TODO GENMC proper error handling
+            genmc_ctx.memory_store(machine, address, range.size)?;
             return interp_ok(());
         }
 
@@ -1797,6 +1810,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             Option<TyAndLayout<'tcx>>,
         ) -> InterpResult<'tcx, OpTy<'tcx>>,
     {
+        info!("GenMC: TODO GENMC: evaluating MIR constant: {val:?}");
         let frame = ecx.active_thread_stack().last().unwrap();
         let mut cache = ecx.machine.const_cache.borrow_mut();
         match cache.entry((val, frame.extra.salt)) {

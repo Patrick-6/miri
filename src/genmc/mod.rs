@@ -1,11 +1,14 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 #[allow(unused_imports)] // TODO GENMC: false warning?
 use std::pin::Pin;
 
-use cxx::UniquePtr;
+#[allow(unused_imports)] // TODO GENMC: false warning?
+use cxx::{CxxString, UniquePtr};
 use rand::prelude::*;
 use rand::rngs::StdRng;
 use rustc_abi::{Align, Size};
+use rustc_const_eval::interpret::{InterpResult, interp_ok};
+use rustc_middle::{throw_ub_format, throw_unsup_format};
 use tracing::{info, warn};
 
 use self::ffi::{
@@ -29,10 +32,12 @@ mod thread_info_manager;
 pub use self::config::{GenmcConfig, GenmcPrintGraphSetting};
 pub use self::ffi::GenmcParams;
 
+/// TODO GENMC: remove this:
+const IGNORE_NON_ATOMICS: bool = true;
+
 // TODO GENMC: extract the ffi module if possible, to reduce number of required recompilation
 #[cxx::bridge]
 mod ffi {
-
     /// Parameters that will be given to GenMC for setting up the model checker.
     /// (The fields of this struct are visible to both Rust and C++)
     #[derive(Clone, Debug)]
@@ -87,11 +92,65 @@ mod ffi {
         Terminated = 3, // TODO GENMC: check if any other states/info is needed
     }
 
+    /**** \/ Result & Error types \/ ****/
+
+    #[must_use]
     #[derive(Debug)]
-    struct CompareExchangeResult {
-        read_value: u64, // TODO GENMC: handle bigger values
+    struct ReadModifyWriteResult {
+        old_value: u64,              // TODO GENMC: handle bigger values
+        error: UniquePtr<CxxString>, // TODO GENMC: pass more error info here
         is_success: bool,
     }
+
+    #[must_use]
+    #[derive(Debug)]
+    struct LoadResult {
+        read_value: u64,             // TODO GENMC: handle bigger values
+        error: UniquePtr<CxxString>, // TODO GENMC: pass more error info here
+    }
+
+    #[must_use]
+    #[derive(Debug)]
+    struct StoreResult {
+        error: UniquePtr<CxxString>, // TODO GENMC: pass more error info here
+    }
+
+    #[must_use]
+    #[derive(Debug)]
+    enum VerificationError {
+        VE_NonErrorBegin,
+        VE_OK,
+        VE_WWRace,
+        VE_UnfreedMemory,
+        VE_NonErrorLast,
+        VE_Safety,
+        VE_Recovery,
+        VE_Liveness,
+        VE_RaceNotAtomic,
+        VE_RaceFreeMalloc,
+        VE_FreeNonMalloc,
+        VE_DoubleFree,
+        VE_Allocation,
+
+        VE_InvalidAccessBegin,
+        VE_UninitializedMem,
+        VE_AccessNonMalloc,
+        VE_AccessFreed,
+        VE_InvalidAccessEnd,
+
+        VE_InvalidCreate,
+        VE_InvalidJoin,
+        VE_InvalidUnlock,
+        VE_InvalidBInit,
+        VE_InvalidRecoveryCall,
+        VE_InvalidTruncate,
+        VE_Annotation,
+        VE_MixedSize,
+        VE_LinearizabilityError,
+        VE_SystemError,
+    }
+
+    /**** /\ Result & Error types /\ ****/
 
     extern "Rust" {
         // TODO GENMC (CLEANUP): remove if not needed
@@ -107,9 +166,14 @@ mod ffi {
         type RmwBinOp;
         type StoreEventType;
         type ThreadState;
-        // type OperatingMode; // Estimation(budget) or Verification
 
-        type CompareExchangeResult;
+        // Result / Error types:
+        type LoadResult;
+        type StoreResult;
+        type ReadModifyWriteResult;
+        type VerificationError;
+
+        // type OperatingMode; // Estimation(budget) or Verification
 
         type MiriGenMCShim;
 
@@ -117,7 +181,7 @@ mod ffi {
         -> UniquePtr<MiriGenMCShim>;
 
         fn handleExecutionStart(self: Pin<&mut MiriGenMCShim>);
-        fn handleExecutionEnd(self: Pin<&mut MiriGenMCShim>);
+        fn handleExecutionEnd(self: Pin<&mut MiriGenMCShim>) -> UniquePtr<CxxString>;
 
         fn handleLoad(
             self: Pin<&mut MiriGenMCShim>,
@@ -125,7 +189,7 @@ mod ffi {
             address: usize,
             size: usize,
             memory_ordering: MemoryOrdering,
-        ) -> u64; // TODO GENMC: modify this to allow for handling pointers and u128
+        ) -> LoadResult; // TODO GENMC: modify this to allow for handling pointers and u128
         fn handleReadModifyWrite(
             self: Pin<&mut MiriGenMCShim>,
             thread_id: i32,
@@ -135,7 +199,7 @@ mod ffi {
             store_ordering: MemoryOrdering,
             rmw_op: RmwBinOp,
             rhs_value: u64,
-        ) -> u64; // TODO GENMC: modify this to allow for handling pointers and u128
+        ) -> ReadModifyWriteResult; // TODO GENMC: modify this to allow for handling pointers and u128
         fn handleCompareExchange(
             self: Pin<&mut MiriGenMCShim>,
             thread_id: i32,
@@ -147,7 +211,7 @@ mod ffi {
             success_store_ordering: MemoryOrdering,
             fail_load_ordering: MemoryOrdering,
             can_fail_spuriously: bool,
-        ) -> CompareExchangeResult;
+        ) -> ReadModifyWriteResult;
         fn handleStore(
             self: Pin<&mut MiriGenMCShim>,
             thread_id: i32,
@@ -157,7 +221,7 @@ mod ffi {
             // value: u128, // TODO GENMC: handle this
             memory_ordering: MemoryOrdering,
             store_event_type: StoreEventType,
-        );
+        ) -> StoreResult;
         fn handleFence(
             self: Pin<&mut MiriGenMCShim>,
             thread_id: i32,
@@ -194,6 +258,8 @@ pub struct GenmcCtx {
 
     // TODO GENMC (PERFORMANCE): could use one RefCell for all internals instead of multiple
     thread_infos: RefCell<ThreadInfoManager>,
+
+    allow_data_races: Cell<bool>,
 }
 
 /// Convert an address selected by GenMC into Miri's type for addresses.
@@ -231,8 +297,9 @@ impl GenmcCtx {
         let rng = RefCell::new(StdRng::seed_from_u64(seed));
 
         let thread_infos = RefCell::new(ThreadInfoManager::new());
+        let allow_data_races = Cell::new(false);
 
-        Self { handle, rng, thread_infos }
+        Self { handle, rng, thread_infos, allow_data_races }
     }
 
     pub fn print_genmc_graph(&self) {
@@ -267,6 +334,7 @@ impl GenmcCtx {
 
     pub(crate) fn handle_execution_start(&self) {
         info!("GenMC: inform GenMC that new execution started");
+        self.allow_data_races.replace(false);
         self.thread_infos.borrow_mut().reset();
 
         let mut mc = self.handle.borrow_mut();
@@ -274,12 +342,24 @@ impl GenmcCtx {
         pinned_mc.handleExecutionStart();
     }
 
-    pub(crate) fn handle_execution_end(&self) {
+    pub(crate) fn handle_execution_end(&self) -> Result<(), String> {
         info!("GenMC: inform GenMC that execution ended!");
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
-        pinned_mc.handleExecutionEnd();
+        let result = pinned_mc.handleExecutionEnd();
+        if let Some(msg) = result.as_ref() {
+            let msg = msg.to_string_lossy().to_string();
+            info!("GenMC: execution ended with error \"{msg}\"");
+            Err(msg) // TODO GENMC: add more error info here, and possibly handle this without requiring to clone the CxxString
+        } else {
+            Ok(())
+        }
         // TODO GENMC: could return as result here maybe?
+    }
+
+    pub(crate) fn allow_data_races_all_threads_done(&self) {
+        info!("GenMC: allow_data_races_all_threads_done");
+        self.allow_data_races.replace(true);
     }
 
     //* might fails if there's a race, load might also not read anything (returns None) */
@@ -289,7 +369,10 @@ impl GenmcCtx {
         address: Size,
         size: Size,
         ordering: AtomicReadOrd,
-    ) -> Result<Scalar, ()> {
+        old_val: Option<Scalar>,
+    ) -> InterpResult<'tcx, Scalar> {
+        info!("GenMC: atomic_load: old_val: {old_val:?}");
+        assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let ordering = ordering.convert();
         self.atomic_load_impl(machine, address, size, ordering)
     }
@@ -301,7 +384,8 @@ impl GenmcCtx {
         size: Size,
         value: Scalar,
         ordering: AtomicWriteOrd,
-    ) -> Result<(), ()> {
+    ) -> InterpResult<'tcx, ()> {
+        assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let ordering = ordering.convert();
         self.atomic_store_impl(machine, address, size, value, ordering)
     }
@@ -310,7 +394,8 @@ impl GenmcCtx {
         &self,
         machine: &MiriMachine<'tcx>,
         ordering: AtomicFenceOrd,
-    ) -> Result<(), ()> {
+    ) -> InterpResult<'tcx, ()> {
+        assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         info!("GenMC: atomic_fence with ordering: {ordering:?}");
 
         let ordering = ordering.convert();
@@ -323,7 +408,8 @@ impl GenmcCtx {
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
         pinned_mc.handleFence(genmc_tid.0, ordering);
 
-        Ok(())
+        // TODO GENMC: can this operation ever fail?
+        interp_ok(())
     }
 
     pub(crate) fn atomic_rmw_op<'tcx>(
@@ -335,7 +421,8 @@ impl GenmcCtx {
         rmw_op: AtomicOp,
         rhs_scalar: Scalar,
         is_unsigned: bool,
-    ) -> Result<Scalar, ()> {
+    ) -> InterpResult<'tcx, (Scalar, bool)> {
+        assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let (load_ordering, store_ordering) = ordering.to_genmc_memory_orderings();
         let genmc_rmw_op = rmw_op.to_genmc_rmw_op(is_unsigned);
         tracing::info!(
@@ -359,7 +446,8 @@ impl GenmcCtx {
         size: Size,
         rhs_scalar: Scalar,
         ordering: AtomicRwOrd,
-    ) -> Result<Scalar, ()> {
+    ) -> InterpResult<'tcx, (Scalar, bool)> {
+        assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         // TODO GENMC: could maybe merge this with atomic_rmw?
 
         let (load_ordering, store_ordering) = ordering.to_genmc_memory_orderings();
@@ -388,7 +476,8 @@ impl GenmcCtx {
         success: AtomicRwOrd,
         fail: AtomicReadOrd,
         can_fail_spuriously: bool,
-    ) -> Result<(Scalar, bool), ()> {
+    ) -> InterpResult<'tcx, (Scalar, bool)> {
+        assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let (success_load_ordering, success_store_ordering) = success.to_genmc_memory_orderings();
         let fail_load_ordering = fail.convert();
 
@@ -417,7 +506,7 @@ impl GenmcCtx {
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
-        let result = pinned_mc.handleCompareExchange(
+        let cas_result = pinned_mc.handleCompareExchange(
             genmc_tid.0,
             genmc_address,
             genmc_size,
@@ -429,11 +518,17 @@ impl GenmcCtx {
             can_fail_spuriously,
         );
 
-        let return_scalar = genmc_scalar_to_scalar(result.read_value, size);
+        if let Some(error) = cas_result.error.as_ref() {
+            let msg = error.to_string_lossy().to_string();
+            info!("GenMC: RMW operation returned an error: \"{msg}\"");
+            throw_ub_format!("{}", msg); // TODO GENMC: proper error handling: find correct error here
+        }
+
+        let return_scalar = genmc_scalar_to_scalar(cas_result.old_value, size);
         info!(
-            "GenMC: atomic_compare_exchange: result: {result:?}, returning scalar: {return_scalar:?}"
+            "GenMC: atomic_compare_exchange: result: {cas_result:?}, returning scalar: {return_scalar:?}"
         );
-        Ok((return_scalar, result.is_success))
+        interp_ok((return_scalar, cas_result.is_success))
     }
 
     pub(crate) fn memory_load<'tcx>(
@@ -441,15 +536,19 @@ impl GenmcCtx {
         machine: &MiriMachine<'tcx>,
         address: Size,
         size: Size,
-    ) -> Result<(), ()> {
+    ) -> InterpResult<'tcx, Scalar> {
+        if self.allow_data_races.get() {
+            // TODO GENMC: handle this properly
+            info!("GenMC: skipping `handle_load`");
+            let dummy = Scalar::from_u64(0xDEADBEEF);
+            return interp_ok(dummy);
+        }
         info!("GenMC: received memory_load (non-atomic): address: {address:?}, size: {size:?}",);
         // GenMC doesn't like ZSTs, and they can't have any data races, so we skip them
         if size.bytes() == 0 {
-            return Ok(());
+            return interp_ok(Scalar::from_bool(false)); // TODO GENMC: what should be returned here?
         }
-        let _read_scalar =
-            self.atomic_load_impl(machine, address, size, MemoryOrdering::NotAtomic)?;
-        Ok(())
+        self.atomic_load_impl(machine, address, size, MemoryOrdering::NotAtomic)
     }
 
     pub(crate) fn memory_store<'tcx>(
@@ -458,11 +557,16 @@ impl GenmcCtx {
         address: Size,
         size: Size,
         // value: crate::Scalar,
-    ) -> Result<(), ()> {
+    ) -> InterpResult<'tcx, ()> {
+        if self.allow_data_races.get() {
+            // TODO GENMC: handle this properly
+            info!("GenMC: skipping `handle_store`");
+            return interp_ok(());
+        }
         info!("GenMC: received memory_store (non-atomic): address: {address:?}, size: {size:?}");
         // GenMC doesn't like ZSTs, and they can't have any data races, so we skip them
         if size.bytes() == 0 {
-            return Ok(());
+            return interp_ok(());
         }
         let dummy_scalar = Scalar::from_u64(0xDEADBEEF);
         self.atomic_store_impl(machine, address, size, dummy_scalar, MemoryOrdering::NotAtomic)
@@ -475,32 +579,70 @@ impl GenmcCtx {
         machine: &MiriMachine<'tcx>,
         size: Size,
         alignment: Align,
-    ) -> Result<u64, ()> {
+        memory_kind: MemoryKind,
+    ) -> InterpResult<'tcx, u64> {
+        // eprintln!(
+        //     "handle_alloc ({memory_kind:?}): Custom backtrace: {}",
+        //     std::backtrace::Backtrace::force_capture()
+        // );
+        if self.allow_data_races.get() {
+            // TODO GENMC: handle this properly
+            info!("GenMC: skipping `handle_alloc`");
+            return interp_ok(0);
+        }
         let thread_infos = self.thread_infos.borrow();
         let curr_thread = machine.threads.active_thread();
         let genmc_tid = thread_infos.get_info(curr_thread).genmc_tid;
         // GenMC doesn't support ZSTs, so we set the minimum size to 1 byte
         let genmc_size = size_to_genmc(size).max(1);
         info!(
-            "GenMC: handle_alloc (thread: {curr_thread:?} ({genmc_tid:?}), size: {size:?} (genmc size: {genmc_size} bytes), alignment: {alignment:?})"
+            "GenMC: handle_alloc (thread: {curr_thread:?} ({genmc_tid:?}), size: {size:?} (genmc size: {genmc_size} bytes), alignment: {alignment:?}, memory_kind: {memory_kind:?})"
         );
+        if memory_kind == MemoryKind::Machine(crate::MiriMemoryKind::Global) {
+            info!("GenMC: handle_alloc: TODO GENMC: maybe handle initialization of globals here?");
+        }
         // kind: MemoryKind, TODO GENMC: Does GenMC care about the kind of Memory?
 
         let alignment = alignment.bytes_usize();
 
-        let mut mc = self.handle.borrow_mut();
-        let pinned_mc = mc.as_mut().expect("model checker should not be null");
-        let genmc_address = pinned_mc.handleMalloc(genmc_tid.0, genmc_size, alignment);
-        info!("GenMC: handle_alloc: got address '{genmc_address}' (0x{genmc_address:x})");
+        let chosen_address = {
+            let mut mc = self.handle.borrow_mut();
+            let pinned_mc = mc.as_mut().expect("model checker should not be null");
+            let genmc_address = pinned_mc.handleMalloc(genmc_tid.0, genmc_size, alignment);
+            info!("GenMC: handle_alloc: got address '{genmc_address}' (0x{genmc_address:x})");
 
-        // TODO GENMC:
-        if genmc_address == 0 {
-            return Err(());
-        }
+            // TODO GENMC:
+            if genmc_address == 0 {
+                throw_unsup_format!("TODO GENMC: we got address '0' from malloc");
+            }
+            to_miri_size(genmc_address).bytes()
+        };
 
-        let chosen_address = to_miri_size(genmc_address);
-        let chosen_address = chosen_address.bytes();
-        Ok(chosen_address)
+        info!(
+            "GenMC: writing to allocated memory with dummy value: TODO GENMC: handle 'backdating' of allocation"
+        );
+        self.memory_store(machine, Size::from_bytes(chosen_address), size)?;
+
+        interp_ok(chosen_address)
+    }
+
+    pub(crate) fn init_allocation<'tcx>(
+        &self,
+        _machine: &MiriMachine<'tcx>,
+        // address: Size,
+        size: Size,
+        align: Align,
+        kind: MemoryKind,
+    ) {
+        // TODO GENMC: handle "backdating" of allocation and their initialization
+        info!(
+            "GenMC: TODO GENMC: init_allocation: size: {size:?}, align: {align:?}, kind: {kind:?}"
+        );
+
+        // let dummy_scalar = Scalar::from_u64(0xDEADBEEF);
+        // // TODO GENMC: proper error handling:
+        // self.atomic_store_impl(machine, address, size, dummy_scalar, MemoryOrdering::NotAtomic)
+        //     .unwrap();
     }
 
     pub(crate) fn handle_dealloc<'tcx>(
@@ -511,6 +653,12 @@ impl GenmcCtx {
         align: Align,
         kind: MemoryKind,
     ) -> Result<(), ()> {
+        if self.allow_data_races.get() {
+            // TODO GENMC: handle this properly
+            info!("GenMC: skipping `handle_dealloc`");
+            return Ok(());
+        }
+        // eprintln!("handle_dealloc: Custom backtrace: {}", std::backtrace::Backtrace::force_capture());
         let thread_infos = self.thread_infos.borrow();
         let curr_thread = machine.threads.active_thread();
         let genmc_tid = thread_infos.get_info(curr_thread).genmc_tid;
@@ -536,6 +684,7 @@ impl GenmcCtx {
         threads: &ThreadManager<'tcx>,
         new_thread_id: ThreadId,
     ) -> Result<(), ()> {
+        assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let mut thread_infos = self.thread_infos.borrow_mut();
 
         let curr_thread_id = threads.active_thread();
@@ -560,6 +709,7 @@ impl GenmcCtx {
         active_thread_id: ThreadId,
         child_thread_id: ThreadId,
     ) -> Result<(), ()> {
+        assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let thread_infos = self.thread_infos.borrow();
 
         let genmc_curr_tid = thread_infos.get_info(active_thread_id).genmc_tid;
@@ -580,6 +730,7 @@ impl GenmcCtx {
         &self,
         threads: &ThreadManager<'tcx>,
     ) -> Result<(), ()> {
+        assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let thread_infos = self.thread_infos.borrow();
         let curr_thread_id = threads.active_thread();
         let genmc_tid = thread_infos.get_info(curr_thread_id).genmc_tid;
@@ -616,6 +767,7 @@ impl GenmcCtx {
         &self,
         thread_manager: &ThreadManager<'tcx>,
     ) -> Result<ThreadId, ()> {
+        assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let thread_infos = self.thread_infos.borrow();
         let thread_count = thread_infos.thread_count();
 
@@ -662,7 +814,9 @@ impl GenmcCtx {
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
         let result = pinned_mc.scheduleNext(&threads_state);
-        if let Ok(genmc_next_thread_id) = GenmcThreadIdInner::try_from(result) {
+        info!("GenMC: scheduling result: {result}");
+        if result >= 0 {
+            let genmc_next_thread_id = GenmcThreadIdInner::try_from(result).unwrap();
             assert_eq!(
                 threads_state.get(usize::try_from(genmc_next_thread_id).unwrap()),
                 Some(&ThreadState::Enabled)
@@ -677,7 +831,12 @@ impl GenmcCtx {
             Ok(next_thread_id)
         } else {
             // Negative result means there is no next thread to schedule
-            unimplemented!();
+            info!(
+                "GenMC: scheduleNext returned no thread to schedule. Thread states: {threads_state:?}"
+            );
+            throw_unsup_format!(
+                "GenMC returned no thread to schedule next: TODO GENMC: is this showing a deadlock or a bug?"
+            );
         }
 
         // let enabled_thread_count = thread_manager.get_enabled_thread_count();
@@ -704,7 +863,16 @@ impl GenmcCtx {
         address: Size,
         size: Size,
         memory_ordering: MemoryOrdering,
-    ) -> Result<Scalar, ()> {
+    ) -> InterpResult<'tcx, Scalar> {
+        if IGNORE_NON_ATOMICS && memory_ordering == MemoryOrdering::NotAtomic {
+            info!("GenMC: TODO GENMC: skipping non-atomic load!");
+            return interp_ok(Scalar::from_u64(0));
+        }
+        // eprintln!(
+        //     "atomic_load_impl ({memory_ordering:?}): Custom backtrace: {}",
+        //     std::backtrace::Backtrace::force_capture()
+        // );
+        assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         assert_ne!(0, size.bytes());
         let thread_infos = self.thread_infos.borrow();
         let curr_thread_id = machine.threads.active_thread();
@@ -718,10 +886,19 @@ impl GenmcCtx {
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
-        let read_value =
+        let load_result =
             pinned_mc.handleLoad(genmc_tid.0, genmc_address, genmc_size, memory_ordering);
 
-        Ok(if memory_ordering == MemoryOrdering::NotAtomic {
+        if let Some(error) = load_result.error.as_ref() {
+            let msg = error.to_string_lossy().to_string();
+            info!("GenMC: load operation returned an error: \"{msg}\"");
+            throw_ub_format!("{}", msg); // TODO GENMC: proper error handling: find correct error here
+        }
+
+        // TODO GENMC (u128): handle bigger integer types
+        let read_value = load_result.read_value;
+
+        interp_ok(if memory_ordering == MemoryOrdering::NotAtomic {
             // TODO GENMC (HACK): to handle large non-atomics, we ignore the value by GenMC for now
             Scalar::from_u64(0xDEADBEEF)
         } else {
@@ -736,7 +913,11 @@ impl GenmcCtx {
         size: Size,
         value: Scalar, // TODO GENMC: handle larger values
         memory_ordering: MemoryOrdering,
-    ) -> Result<(), ()> {
+    ) -> InterpResult<'tcx, ()> {
+        if IGNORE_NON_ATOMICS && memory_ordering == MemoryOrdering::NotAtomic {
+            info!("GenMC: TODO GENMC: skipping non-atomic store!");
+            return interp_ok(());
+        }
         assert_ne!(0, size.bytes());
         let thread_infos = self.thread_infos.borrow();
         let curr_thread_id = machine.threads.active_thread();
@@ -752,7 +933,7 @@ impl GenmcCtx {
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
-        pinned_mc.handleStore(
+        let store_result = pinned_mc.handleStore(
             genmc_tid.0,
             genmc_address,
             genmc_size,
@@ -760,8 +941,14 @@ impl GenmcCtx {
             memory_ordering,
             StoreEventType::Normal,
         );
-        // TODO GENMC
-        Ok(())
+
+        if let Some(error) = store_result.error.as_ref() {
+            let msg = error.to_string_lossy().to_string();
+            info!("GenMC: store operation returned an error: \"{msg}\"");
+            throw_ub_format!("{}", msg); // TODO GENMC: proper error handling: find correct error here
+        }
+
+        interp_ok(())
     }
 
     pub(crate) fn atomic_rmw_op_impl<'tcx>(
@@ -773,7 +960,7 @@ impl GenmcCtx {
         store_ordering: MemoryOrdering,
         genmc_rmw_op: RmwBinOp,
         rhs_scalar: Scalar,
-    ) -> Result<Scalar, ()> {
+    ) -> InterpResult<'tcx, (Scalar, bool)> {
         assert_ne!(0, size.bytes());
         let thread_infos = self.thread_infos.borrow();
         let curr_thread_id = machine.threads.active_thread();
@@ -790,7 +977,7 @@ impl GenmcCtx {
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
-        let old_value = pinned_mc.handleReadModifyWrite(
+        let rmw_result = pinned_mc.handleReadModifyWrite(
             genmc_tid.0,
             genmc_address,
             genmc_size,
@@ -800,8 +987,15 @@ impl GenmcCtx {
             genmc_rhs,
         );
 
+        if let Some(error) = rmw_result.error.as_ref() {
+            let msg = error.to_string_lossy().to_string();
+            info!("GenMC: RMW operation returned an error: \"{msg}\"");
+            throw_ub_format!("{}", msg); // TODO GENMC: proper error handling: find correct error here
+        }
+
+        let old_value = rmw_result.old_value;
         let old_value_scalar = genmc_scalar_to_scalar(old_value, size);
-        Ok(old_value_scalar)
+        interp_ok((old_value_scalar, rmw_result.is_success))
     }
 }
 

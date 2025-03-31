@@ -34,7 +34,7 @@ fn main() {
     // let opt_level = 0;
     let opt_level = 2;
 
-    let debug_flags = "";
+    let debug_flags = "-D ENABLE_GENMC_DEBUG";
     // let debug_flags = "-D_GLIBCXX_DEBUG"; // TODO: this causes issue, code compiled with CXX is incompatible with other code
     let cpp_flags = Some(format!(
         "-O{opt_level} -g {debug_flags} -I {WORKSPACE_INCLUDE_PATH} -I {CXX_BRIDGE_INCLUDE_PATH}"
@@ -71,7 +71,7 @@ fn main() {
         .flag("-lffi")
         .flag("-ldl")
         .flag("-lLLVM-19")
-        // .flag(debug_flags) // TODO GENMC (TESTING): make this work somehow
+        .flag(debug_flags) // TODO GENMC (TESTING): make this work somehow
         .include("./genmc")
         // .include("./genmc/include") // For GenMC tests, DO NOT INCLUDE!!
         .include("./genmc/src")

@@ -118,9 +118,7 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
         let info = this.get_alloc_info(alloc_id);
 
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-            let Ok(addr) = genmc_ctx.handle_alloc(&this.machine, info.size, info.align) else {
-                throw_unsup_format!("TODO GENMC: proper error handling");
-            };
+            let addr = genmc_ctx.handle_alloc(&this.machine, info.size, info.align, memory_kind)?;
             debug!("addr_from_alloc_id_uncached: {alloc_id:?} --> {addr}");
             return interp_ok(addr);
         }
