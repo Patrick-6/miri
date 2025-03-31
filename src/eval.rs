@@ -484,6 +484,11 @@ pub fn eval_entry<'tcx>(
     // `Ok` can never happen.
     let Err(err) = res.report_err();
 
+    // Show diagnostic, if any.
+    let (return_code, leak_check) = report_error(&ecx, err)?;
+
+    // If we get here there was no fatal error.
+
     // Machine cleanup. Only do this if all threads have terminated; threads that are still running
     // might cause Stacked Borrows errors (https://github.com/rust-lang/miri/issues/2396).
     if ecx.have_all_terminated() {
@@ -496,11 +501,14 @@ pub fn eval_entry<'tcx>(
 
     // TODO GENMC: is this the correct place to put this?
     if let Some(genmc_ctx) = ecx.machine.concurrency_handler.as_genmc_ref() {
-        genmc_ctx.handle_execution_end();
+        // TODO GENMC: proper error handling: how to correctly report an error here?
+        if let Err(error) = genmc_ctx.handle_execution_end() {
+            tcx.dcx().err(format!("GenMC returned an error: \"{error}\""));
+            return None;
+        }
     }
 
-    // Process the result.
-    let (return_code, leak_check) = report_error(&ecx, err)?;
+    // Possibly check for memory leaks.
     if leak_check && !ignore_leaks {
         // Check for thread leaks.
         if !ecx.have_all_terminated() {
