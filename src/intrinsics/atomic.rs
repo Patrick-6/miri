@@ -212,18 +212,17 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
             let size = place.layout.size;
             let rhs_scalar = rhs.to_scalar();
             let is_unsigned = matches!(rhs.layout.ty.kind(), ty::Uint(_));
-            let old = genmc_ctx
-                .atomic_rmw_op(
-                    &this.machine,
-                    address,
-                    size,
-                    atomic,
-                    atomic_op,
-                    rhs_scalar,
-                    is_unsigned,
-                )
-                .unwrap(); // TODO GENMC: proper error handling
-            this.write_scalar(old, dest)?;
+            // TODO GENMC: do we need the `is_success` value?
+            let (old, _is_success) = genmc_ctx.atomic_rmw_op(
+                &this.machine,
+                address,
+                size,
+                atomic,
+                atomic_op,
+                rhs_scalar,
+                is_unsigned,
+            )?;
+            this.write_scalar(old, dest)?; // old value is returned
         } else {
             match atomic_op {
                 AtomicOp::Min => {
@@ -262,7 +261,8 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
             let address = place.ptr().addr();
             let size = place.layout.size;
-            let old = genmc_ctx.atomic_exchange(&this.machine, address, size, new, atomic).unwrap(); // TODO GENMC: proper error handling
+            // TODO GENMC: do we need the `is_success` value?
+            let (old, _is_success) = genmc_ctx.atomic_exchange(&this.machine, address, size, new, atomic)?;
             this.write_scalar(old, dest)?; // old value is returned
         }
 
@@ -298,8 +298,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
                     success,
                     fail,
                     can_fail_spuriously,
-                )
-                .unwrap(); // TODO GENMC: proper error handling
+                )?;
 
             let old = Immediate::ScalarPair(old, Scalar::from_bool(cmpxchg_success));
 
