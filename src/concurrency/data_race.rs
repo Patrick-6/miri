@@ -699,11 +699,14 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         // Only metadata on the location itself is used.
 
         // Inform GenMC about the atomic load.
+        // TODO GENMC: suboptimal, this doesn't need to run during non-GenMC mode:
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
             let address = place.ptr().addr();
             let size = place.layout.size;
-            let value = genmc_ctx.atomic_load(&this.machine, address, size, atomic).unwrap(); // TODO GENMC proper error handling
-            interp_ok(value)
+            // TODO GENMC: handling mixed atomics/non-atomics:
+            let old_val = None;
+            // let old_val = this.run_for_validation_ref(|this| this.read_scalar(place)).discard_err();
+            genmc_ctx.atomic_load(&this.machine, address, size, atomic, old_val)
         } else {
             // TODO GENMC: this may need to be replaced, and the value should be requested from GenMC instead:
             let scalar = this.allow_data_races_ref(move |this| this.read_scalar(place))?;
@@ -740,9 +743,10 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
             let address = dest.ptr().addr();
             let size = dest.layout.size;
-            genmc_ctx.atomic_store(&this.machine, address, size, val, atomic).unwrap(); // TODO GENMC proper error handling
+            genmc_ctx.atomic_store(&this.machine, address, size, val, atomic)?;
         }
 
+        // TODO GENMC: is this required in GenMC mode?:
         this.buffered_atomic_write(val, dest, atomic, old_val)
     }
 
@@ -927,10 +931,8 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
                     },
                 )
             }
-            machine::ConcurrencyHandler::GenMC(genmc_ctx) => {
-                genmc_ctx.atomic_fence(&this.machine, atomic).unwrap(); // TODO GENMC: proper error handling
-                interp_ok(())
-            }
+            machine::ConcurrencyHandler::GenMC(genmc_ctx) =>
+                genmc_ctx.atomic_fence(&this.machine, atomic),
         }
     }
 
@@ -939,11 +941,16 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
     fn allow_data_races_all_threads_done(&mut self) {
         let this = self.eval_context_ref();
         assert!(this.have_all_terminated());
-        if let ConcurrencyHandler::DataRace(data_race) = &this.machine.concurrency_handler {
-            let old = data_race.ongoing_action_data_race_free.replace(true);
-            assert!(!old, "cannot nest allow_data_races");
+        match &this.machine.concurrency_handler {
+            ConcurrencyHandler::None => {}
+            ConcurrencyHandler::DataRace(data_race) => {
+                let old = data_race.ongoing_action_data_race_free.replace(true);
+                assert!(!old, "cannot nest allow_data_races");
+            }
+            ConcurrencyHandler::GenMC(genmc_ctx) => {
+                genmc_ctx.allow_data_races_all_threads_done();
+            }
         }
-        // TODO GENMC: does GenMC need to be informed about this?
     }
 
     /// Calls the callback with the "release" clock of the current thread.
