@@ -242,6 +242,12 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
                 }
 
                 let is_exploration_done = genmc_ctx.is_exploration_done();
+
+                // // TODO GENMC (DEBUG):
+                // eprintln!("=============================> TODO GENMC DEBUG PRINTING GRAPH AFTER IT IS CHANGED! <=============================");
+                // genmc_ctx.print_genmc_graph();
+                // eprintln!("=============================> TODO GENMC DEBUG PRINTING GRAPH AFTER IT IS CHANGED! <=============================");
+
                 tracing::info!(
                     "(GenMC Mode) Execution done (return code: {return_code}), is_exploration_done: {is_exploration_done}",
                 );

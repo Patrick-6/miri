@@ -240,6 +240,9 @@ mod ffi {
         fn handleThreadJoin(self: Pin<&mut MiriGenMCShim>, thread_id: i32, child_id: i32);
         fn handleThreadFinish(self: Pin<&mut MiriGenMCShim>, thread_id: i32, ret_val: u64);
 
+        /**** Blocking instructions ****/
+        fn handleUserBlock(self: Pin<&mut MiriGenMCShim>, thread_id: i32);
+
         fn scheduleNext(self: Pin<&mut MiriGenMCShim>, thread_states: &[ThreadState]) -> i64;
         fn isHalting(self: &MiriGenMCShim) -> bool;
         fn isMoot(self: &MiriGenMCShim) -> bool;
@@ -766,7 +769,7 @@ impl GenmcCtx {
     pub(crate) fn schedule_thread<'tcx>(
         &self,
         thread_manager: &ThreadManager<'tcx>,
-    ) -> Result<ThreadId, ()> {
+    ) -> InterpResult<'tcx, ThreadId> {
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let thread_infos = self.thread_infos.borrow();
         let thread_count = thread_infos.thread_count();
@@ -828,7 +831,7 @@ impl GenmcCtx {
                 "GenMC: next thread to run is {next_thread_id:?} ({genmc_next_thread_id:?}), total {} threads",
                 threads_state.len()
             );
-            Ok(next_thread_id)
+            interp_ok(next_thread_id)
         } else {
             // Negative result means there is no next thread to schedule
             info!(
@@ -852,6 +855,27 @@ impl GenmcCtx {
         //     return Ok(thread_id);
         // }
         // unreachable!()
+    }
+
+    /**** Blocking instructions ****/
+
+    pub(crate) fn handle_verifier_assume<'tcx>(
+        &self,
+        machine: &MiriMachine<'tcx>,
+        condition: bool,
+    ) -> InterpResult<'tcx, ()> {
+        info!("GenMC: handle_verifier_assume, condition: {condition}");
+        if !condition {
+            let thread_infos = self.thread_infos.borrow();
+            let curr_thread = machine.threads.active_thread();
+            let genmc_curr_thread = thread_infos.get_info(curr_thread).genmc_tid;
+
+            let mut mc = self.handle.borrow_mut();
+            let pinned_mc = mc.as_mut().expect("model checker should not be null");
+            pinned_mc.handleUserBlock(genmc_curr_thread.0);
+        }
+        // TODO GENMC: is this a terminator, i.e., can GenMC schedule afterwards?
+        interp_ok(())
     }
 }
 
