@@ -766,7 +766,7 @@ impl<'tcx> ThreadManager<'tcx> {
         //
 
         if let Some(genmc_ctx) = concurrency_handler.as_genmc_ref() {
-            let next_thread_id = genmc_ctx.schedule_thread(self).unwrap();
+            let next_thread_id = genmc_ctx.schedule_thread(self)?;
             self.active_thread = next_thread_id;
         } else {
             // TODO GENMC: in GenMC mode, ask GenMC for the next thread to schedule
