@@ -28,7 +28,7 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
 extern "C" fn thread_1(_value: *mut c_void) -> *mut c_void {
     unsafe { X = 1 };
     Y.store(0, Ordering::Release);
-    Y.store(0, Ordering::Relaxed);
+    Y.store(1, Ordering::Relaxed);
     std::ptr::null_mut()
 }
 
