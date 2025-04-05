@@ -877,6 +877,7 @@ impl GenmcCtx {
             let thread_infos = self.thread_infos.borrow();
             let curr_thread = machine.threads.active_thread();
             let genmc_curr_thread = thread_infos.get_info(curr_thread).genmc_tid;
+            info!("GenMC: handle_verifier_assume, blocking thread {curr_thread:?} ({genmc_curr_thread:?})");
 
             let mut mc = self.handle.borrow_mut();
             let pinned_mc = mc.as_mut().expect("model checker should not be null");
