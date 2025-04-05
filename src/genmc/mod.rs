@@ -33,7 +33,7 @@ pub use self::config::{GenmcConfig, GenmcPrintGraphSetting};
 pub use self::ffi::GenmcParams;
 
 /// TODO GENMC: remove this:
-const IGNORE_NON_ATOMICS: bool = true;
+const IGNORE_NON_ATOMICS: bool = false;
 
 // TODO GENMC: extract the ffi module if possible, to reduce number of required recompilation
 #[cxx::bridge]
@@ -360,9 +360,17 @@ impl GenmcCtx {
         // TODO GENMC: could return as result here maybe?
     }
 
-    pub(crate) fn allow_data_races_all_threads_done(&self) {
-        info!("GenMC: allow_data_races_all_threads_done");
-        self.allow_data_races.replace(true);
+    /// If `true` is passed, allow for data races to happen without an error, until `false` is passed
+    /// 
+    /// Certain operations are not permitted in GenMC mode with data races disabled, e.g., atomic accesses
+    /// TODO GENMC: Document this better (or enable more functionality with data races disabled)
+    /// 
+    /// # Panics
+    /// This method will panic if data races are nested
+    pub(crate) fn set_ongoing_action_data_race_free(&self, enable: bool) {
+        info!("GenMC: allow_data_races_all_threads_done ({enable})");
+        let old = self.allow_data_races.replace(enable);
+        assert_ne!(old, enable, "cannot nest allow_data_races");
     }
 
     //* might fails if there's a race, load might also not read anything (returns None) */
