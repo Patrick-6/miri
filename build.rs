@@ -85,7 +85,7 @@ fn main() {
     println!("cargo::warning=New working directory': {:?}'", std::env::current_dir().unwrap());
 
     assert!(
-        Command::new("make").arg("-j").status().expect("failed to run command").success(),
+        Command::new("make").arg("-j8").status().expect("failed to run command").success(),
         "make failed!"
     );
     std::env::set_current_dir("../").unwrap();

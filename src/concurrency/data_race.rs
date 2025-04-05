@@ -948,7 +948,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
                 assert!(!old, "cannot nest allow_data_races");
             }
             ConcurrencyHandler::GenMC(genmc_ctx) => {
-                genmc_ctx.allow_data_races_all_threads_done();
+                genmc_ctx.set_ongoing_action_data_race_free(true);
             }
         }
     }
@@ -1385,17 +1385,28 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
     #[inline]
     fn allow_data_races_mut<R>(&mut self, op: impl FnOnce(&mut MiriInterpCx<'tcx>) -> R) -> R {
         let this = self.eval_context_mut();
-        // TODO GENMC: is this relevant for GenMC? Does GenMC need to know about these racy accesses?
-        tracing::info!(
-            "GenMC: allow_data_races_mut: TODO GENMC: does GenMC need to know about this?"
-        );
-        if let Some(data_race) = this.machine.concurrency_handler.as_data_race_ref() {
-            let old = data_race.ongoing_action_data_race_free.replace(true);
-            assert!(!old, "cannot nest allow_data_races");
+        tracing::info!("GenMC: allow_data_races_mut");
+        match &this.machine.concurrency_handler {
+            ConcurrencyHandler::None => {}
+            ConcurrencyHandler::DataRace(data_race) => {
+                let old = data_race.ongoing_action_data_race_free.replace(true);
+                assert!(!old, "cannot nest allow_data_races");
+            }
+            ConcurrencyHandler::GenMC(genmc_ctx) => {
+                genmc_ctx.set_ongoing_action_data_race_free(true);
+            }
         }
+
         let result = op(this);
-        if let Some(data_race) = this.machine.concurrency_handler.as_data_race_ref() {
-            data_race.ongoing_action_data_race_free.set(false);
+
+        match &this.machine.concurrency_handler {
+            ConcurrencyHandler::None => {}
+            ConcurrencyHandler::DataRace(data_race) => {
+                data_race.ongoing_action_data_race_free.set(false);
+            }
+            ConcurrencyHandler::GenMC(genmc_ctx) => {
+                genmc_ctx.set_ongoing_action_data_race_free(false);
+            }
         }
         result
     }
