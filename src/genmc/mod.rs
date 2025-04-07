@@ -361,14 +361,14 @@ impl GenmcCtx {
     }
 
     /// If `true` is passed, allow for data races to happen without an error, until `false` is passed
-    /// 
+    ///
     /// Certain operations are not permitted in GenMC mode with data races disabled, e.g., atomic accesses
     /// TODO GENMC: Document this better (or enable more functionality with data races disabled)
-    /// 
+    ///
     /// # Panics
     /// This method will panic if data races are nested
     pub(crate) fn set_ongoing_action_data_race_free(&self, enable: bool) {
-        info!("GenMC: allow_data_races_all_threads_done ({enable})");
+        info!("GenMC: set_ongoing_action_data_race_free ({enable})");
         let old = self.allow_data_races.replace(enable);
         assert_ne!(old, enable, "cannot nest allow_data_races");
     }
@@ -663,11 +663,11 @@ impl GenmcCtx {
         size: Size,
         align: Align,
         kind: MemoryKind,
-    ) -> Result<(), ()> {
+    ) -> InterpResult<'tcx, ()> {
         if self.allow_data_races.get() {
-            // TODO GENMC: handle this properly
+            // TODO GENMC: handle this properly, should this be skipped in this mode?
             info!("GenMC: skipping `handle_dealloc`");
-            return Ok(());
+            return interp_ok(());
         }
         // eprintln!("handle_dealloc: Custom backtrace: {}", std::backtrace::Backtrace::force_capture());
         let thread_infos = self.thread_infos.borrow();
@@ -685,7 +685,8 @@ impl GenmcCtx {
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
         pinned_mc.handleFree(genmc_tid.0, genmc_address, genmc_size);
 
-        Ok(())
+        // TODO GENMC (ERROR HANDLING): can this ever fail?
+        interp_ok(())
     }
 
     /**** Thread management ****/
@@ -694,7 +695,7 @@ impl GenmcCtx {
         &self,
         threads: &ThreadManager<'tcx>,
         new_thread_id: ThreadId,
-    ) -> Result<(), ()> {
+    ) -> InterpResult<'tcx, ()> {
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let mut thread_infos = self.thread_infos.borrow_mut();
 
@@ -710,7 +711,8 @@ impl GenmcCtx {
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
         pinned_mc.handleThreadCreate(genmc_new_tid.0, genmc_parent_tid.0);
 
-        Ok(())
+        // TODO GENMC (ERROR HANDLING): can this ever fail?
+        interp_ok(())
     }
 
     pub(crate) fn handle_thread_join(
@@ -740,7 +742,7 @@ impl GenmcCtx {
     pub(crate) fn handle_thread_finish<'tcx>(
         &self,
         threads: &ThreadManager<'tcx>,
-    ) -> Result<(), ()> {
+    ) -> InterpResult<'tcx, ()> {
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let thread_infos = self.thread_infos.borrow();
         let curr_thread_id = threads.active_thread();
@@ -757,7 +759,8 @@ impl GenmcCtx {
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
         pinned_mc.handleThreadFinish(genmc_tid.0, ret_val);
 
-        Ok(())
+        // TODO GENMC (ERROR HANDLING): can this ever fail?
+        interp_ok(())
     }
 
     /**** Scheduling functionality ****/
@@ -822,6 +825,8 @@ impl GenmcCtx {
         }
         // TODO GENMC (OPTIMIZATION): could possibly skip scheduling call to GenMC if we only have 1 enabled thread
 
+        info!("GenMC: schedule_thread: thread states: {threads_state:?}");
+
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
         let result = pinned_mc.scheduleNext(&threads_state);
@@ -877,7 +882,9 @@ impl GenmcCtx {
             let thread_infos = self.thread_infos.borrow();
             let curr_thread = machine.threads.active_thread();
             let genmc_curr_thread = thread_infos.get_info(curr_thread).genmc_tid;
-            info!("GenMC: handle_verifier_assume, blocking thread {curr_thread:?} ({genmc_curr_thread:?})");
+            info!(
+                "GenMC: handle_verifier_assume, blocking thread {curr_thread:?} ({genmc_curr_thread:?})"
+            );
 
             let mut mc = self.handle.borrow_mut();
             let pinned_mc = mc.as_mut().expect("model checker should not be null");
