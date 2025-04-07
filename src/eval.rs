@@ -246,7 +246,13 @@ impl<'tcx> MainThreadState<'tcx> {
                         if this.machine.preemption_rate > 0.0 {
                             // There is a non-zero chance they will yield back to us often enough to
                             // make Miri terminate eventually.
-                            *self = Yield { remaining: MAIN_THREAD_YIELDS_AT_SHUTDOWN };
+                            if this.machine.concurrency_handler.as_genmc_ref().is_some() {
+                                // TODO GENMC (HACK): in GenMC mode this is not required, but removing it might cause other problems
+                                //                    so we just set it to a low value for now
+                                *self = Yield { remaining: 4 };
+                            } else {
+                                *self = Yield { remaining: MAIN_THREAD_YIELDS_AT_SHUTDOWN };
+                            }
                         } else {
                             // The other threads did not get preempted, so no need to yield back to
                             // them.

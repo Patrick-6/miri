@@ -1536,11 +1536,10 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             machine.emit_diagnostic(NonHaltingDiagnostic::FreedAlloc(alloc_id));
         }
 
-        // TODO GENMC: inform GenMC about the free
-        // TODO GENMC: combined this with code for the data race checker (if any)
+        // TODO GENMC: combine this with code for the data race checker (if any)
         if let Some(genmc_ctx) = machine.concurrency_handler.as_genmc_ref() {
             let address = ptr.addr();
-            genmc_ctx.handle_dealloc(machine, address, size, align, kind).unwrap();
+            genmc_ctx.handle_dealloc(machine, address, size, align, kind)?;
         } else if let Some(data_race) = &mut alloc_extra.data_race {
             data_race.write(
                 alloc_id,

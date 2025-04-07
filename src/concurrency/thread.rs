@@ -932,7 +932,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             ConcurrencyHandler::DataRace(data_race) =>
                 data_race.thread_created(&this.machine.threads, new_thread_id, current_span),
             ConcurrencyHandler::GenMC(genmc_ctx) =>
-                genmc_ctx.handle_thread_create(&this.machine.threads, new_thread_id).unwrap(), // TODO GENMC: proper error handling,
+                genmc_ctx.handle_thread_create(&this.machine.threads, new_thread_id)?,
         }
         // Write the current thread-id, switch to the next thread later
         // to treat this write operation as occurring on the current thread.
@@ -990,7 +990,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             ConcurrencyHandler::DataRace(data_race) =>
                 data_race.thread_terminated(&this.machine.threads),
             ConcurrencyHandler::GenMC(genmc_ctx) =>
-                genmc_ctx.handle_thread_finish(&this.machine.threads).unwrap(), // TODO GENMC: proper error handling
+                genmc_ctx.handle_thread_finish(&this.machine.threads)?,
         }
 
         // Deallocate TLS.
