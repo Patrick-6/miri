@@ -433,7 +433,6 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
 
             /*** \/ GENMC VERIFIER CALLS \/ ****/
             "miri_genmc_verifier_assume" => {
-                // TODO GENMC: handle mplace or it's error variant:
                 let [condition] = this.check_shim(abi, Conv::Rust, link_name, args)?;
                 if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
                     let condition = this.read_scalar(condition)?.to_bool()?;
