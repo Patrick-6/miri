@@ -489,6 +489,24 @@ pub fn eval_entry<'tcx>(
     // `Ok` can never happen; the interpreter loop always exits with an "error"
     // (but that "error" might be just "regular program termination").
     let Err(err) = res.report_err();
+
+    if ecx.machine.concurrency_handler.as_genmc_ref().is_some() {
+        tracing::info!("GenMC: execution returned error: {err:?}");
+        match err.kind() {
+            InterpErrorKind::Unsupported(unsupported_op_info) => {
+                match unsupported_op_info {
+                    UnsupportedOpInfo::Unsupported(msg) if msg == "GenMC Execution stuck" => {
+                        // TODO GENMC: maybe emit a warning here?
+                        tracing::info!("GenMC: found stuck execution, not reporting this as an error");
+                        return Some(0);
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
     // Show diagnostic, if any.
     let (return_code, leak_check) = report_error(&ecx, err)?;
 
