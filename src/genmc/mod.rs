@@ -263,6 +263,8 @@ pub struct GenmcCtx {
     thread_infos: RefCell<ThreadInfoManager>,
 
     allow_data_races: Cell<bool>,
+
+    stuck_execution_count: Cell<usize>,
 }
 
 /// Convert an address selected by GenMC into Miri's type for addresses.
@@ -301,8 +303,13 @@ impl GenmcCtx {
 
         let thread_infos = RefCell::new(ThreadInfoManager::new());
         let allow_data_races = Cell::new(false);
+        let stuck_execution_count = Cell::new(0);
 
-        Self { handle, rng, thread_infos, allow_data_races }
+        Self { handle, rng, thread_infos, allow_data_races, stuck_execution_count }
+    }
+
+    pub fn get_stuck_execution_count(&self) -> usize {
+        self.stuck_execution_count.get()
     }
 
     pub fn print_genmc_graph(&self) {
@@ -850,9 +857,16 @@ impl GenmcCtx {
             info!(
                 "GenMC: scheduleNext returned no thread to schedule. Thread states: {threads_state:?}"
             );
-            throw_unsup_format!(
-                "GenMC returned no thread to schedule next: TODO GENMC: is this showing a deadlock or a bug?"
-            );
+            // TODO GENMC: stop the current execution and check if there are more if this happens
+            // TODO GENMC: maybe add a new `throw_*` for these cases? new InterpErrorKind?
+            self.stuck_execution_count.update(|count| count + 1);
+            throw_unsup_format!("GenMC Execution stuck");
+            // "GenMC returned no thread to schedule next: TODO GENMC: is this showing a deadlock or a bug?"
+            // throw_machine_stop!();_
+            // throw_machine_stop_str!(
+            //     "GenMC returned no thread to schedule, aborting this execution..."
+            // )
+            // todo!();
         }
 
         // let enabled_thread_count = thread_manager.get_enabled_thread_count();

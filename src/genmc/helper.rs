@@ -16,10 +16,15 @@ pub fn genmc_scalar_to_scalar(value: u64, size: Size) -> Scalar {
     // TODO GENMC: proper handling of large integers
     // TODO GENMC: proper handling of pointers (currently assumes all integers)
 
-    let value_scalar_int = ScalarInt::try_from_uint(value, size).unwrap();
+    // TODO GENMC (HACK): since we give dummy values to GenMC for NA accesses, we need to be able to convert it back:
+    let value = if size.bytes() == 1 { value.min(u64::from(u8::MAX)) } else { value };
+    let Some(value_scalar_int) = ScalarInt::try_from_uint(value, size) else {
+        todo!(
+            "GenMC: cannot currently convert GenMC value {value} (0x{value:x}), with size {size:?} into a Miri Scalar"
+        );
+    };
     Scalar::Int(value_scalar_int)
 }
-
 
 #[derive(Debug)]
 pub struct Threads {
