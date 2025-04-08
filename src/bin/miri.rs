@@ -254,7 +254,17 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
 
                 if is_exploration_done {
                     // TODO GENMC: proper message here, which info should be printed?
-                    eprintln!("(GenMC Mode) Finished after {} iterations.", rep + 1);
+                    let stuck_execution_count = genmc_ctx.get_stuck_execution_count();
+                    if stuck_execution_count == 0 {
+                        eprintln!("(GenMC Mode) Finished after {} iterations.", rep + 1);
+                    } else {
+                        // TODO GENMC: how should this be reported to the user?
+                        eprintln!(
+                            "(GenMC Mode) Finished after {} iterations, with {stuck_execution_count} {} getting stuck.",
+                            rep + 1,
+                            if stuck_execution_count == 1 { "execution" } else { "executions" }
+                        );
+                    }
 
                     // TODO GENMC: what is an appropriate return code? (since there are possibly many)
                     std::process::exit(return_code);
