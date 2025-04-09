@@ -1,8 +1,8 @@
-error: Undefined Behavior: TODO GENMC: access violation, data race or IPR validity broken
+error: Undefined Behavior: TODO GENMC: checkForRaces failed
   --> tests/fail-dep/genmc/weak_memory/weak_uninit.rs:LL:CC
    |
 LL |         x.load(Ordering::Relaxed);
-   |         ^^^^^^^^^^^^^^^^^^^^^^^^^ TODO GENMC: access violation, data race or IPR validity broken
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^ TODO GENMC: checkForRaces failed
    |
    = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
    = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
