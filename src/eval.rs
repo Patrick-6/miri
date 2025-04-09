@@ -228,6 +228,7 @@ impl<'tcx> MainThreadState<'tcx> {
     ) -> InterpResult<'tcx, Poll<()>> {
         use MainThreadState::*;
         // TODO GENMC: does this also need to happen on other threads?
+        // TODO GENMC: is this still required since it's already called in `run_on_stack_empty`?
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
             let thread_id = this.active_thread();
             // TODO GENMC: thread_id should always be ThreadId::MAIN_THREAD here
@@ -497,7 +498,9 @@ pub fn eval_entry<'tcx>(
                 match unsupported_op_info {
                     UnsupportedOpInfo::Unsupported(msg) if msg == "GenMC Execution stuck" => {
                         // TODO GENMC: maybe emit a warning here?
-                        tracing::info!("GenMC: found stuck execution, not reporting this as an error");
+                        tracing::info!(
+                            "GenMC: found stuck execution, not reporting this as an error"
+                        );
                         return Some(0);
                     }
                     _ => {}
@@ -525,7 +528,7 @@ pub fn eval_entry<'tcx>(
     // TODO GENMC: is this the correct place to put this?
     if let Some(genmc_ctx) = ecx.machine.concurrency_handler.as_genmc_ref() {
         // TODO GENMC: proper error handling: how to correctly report an error here?
-        if let Err(error) = genmc_ctx.handle_execution_end() {
+        if let Err(error) = genmc_ctx.handle_execution_end(&ecx.machine.threads) {
             tcx.dcx().err(format!("GenMC returned an error: \"{error}\""));
             return None;
         }

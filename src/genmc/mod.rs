@@ -181,7 +181,10 @@ mod ffi {
         -> UniquePtr<MiriGenMCShim>;
 
         fn handleExecutionStart(self: Pin<&mut MiriGenMCShim>);
-        fn handleExecutionEnd(self: Pin<&mut MiriGenMCShim>) -> UniquePtr<CxxString>;
+        fn handleExecutionEnd(
+            self: Pin<&mut MiriGenMCShim>,
+            thread_states: &[ThreadState],
+        ) -> UniquePtr<CxxString>;
 
         fn handleLoad(
             self: Pin<&mut MiriGenMCShim>,
@@ -309,6 +312,7 @@ impl GenmcCtx {
     }
 
     pub fn get_stuck_execution_count(&self) -> usize {
+        // TODO GENMC: ask GenMC for this number
         self.stuck_execution_count.get()
     }
 
@@ -352,11 +356,17 @@ impl GenmcCtx {
         pinned_mc.handleExecutionStart();
     }
 
-    pub(crate) fn handle_execution_end(&self) -> Result<(), String> {
+    pub(crate) fn handle_execution_end<'tcx>(
+        &self,
+        thread_manager: &ThreadManager<'tcx>,
+    ) -> Result<(), String> {
         info!("GenMC: inform GenMC that execution ended!");
+        let (thread_states, _enabled_count) = self.get_thread_states(thread_manager);
+        info!("Thread states after execution ends: {thread_states:?}");
+
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
-        let result = pinned_mc.handleExecutionEnd();
+        let result = pinned_mc.handleExecutionEnd(&thread_states);
         if let Some(msg) = result.as_ref() {
             let msg = msg.to_string_lossy().to_string();
             info!("GenMC: execution ended with error \"{msg}\"");
@@ -789,73 +799,35 @@ impl GenmcCtx {
         thread_manager: &ThreadManager<'tcx>,
     ) -> InterpResult<'tcx, ThreadId> {
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
-        let thread_infos = self.thread_infos.borrow();
-        let thread_count = thread_infos.thread_count();
 
-        // TODO GENMC: improve performance, e.g., with SmallVec
-        let mut threads_state: Vec<ThreadState> = vec![ThreadState::Terminated; thread_count];
+        let (thread_states, enabled_count) = self.get_thread_states(thread_manager);
+        assert_ne!(0, enabled_count);
 
-        let mut enabled_count = 0;
-        for (thread_id, thread) in thread_manager.threads_ref().iter_enumerated() {
-            // If a thread is finished, there might still be something to do (see `src/concurrency/thread.rs`: `run_on_stack_empty`)
-            // In that case, the thread is still enabled, but has an empty stack
-            // We don't want to run this thread in GenMC mode (especially not the main thread, which terminates the program once it's done)
-            // We tell GenMC that this thread is disabled
-            let is_enabled = thread.get_state().is_enabled();
-            // TODO GENMC:
-            // let is_finished = thread.top_user_relevant_frame().is_none();
-            // let user_code_finished = thread_infos.get_info(thread_id).user_code_finished;
-            let thread_info = thread_infos.get_info(thread_id);
-            let user_code_finished = thread_info.user_code_finished;
-            let index = usize::try_from(thread_info.genmc_tid.0).unwrap();
-            threads_state[index] = match (is_enabled, user_code_finished) {
-                (true, false) => {
-                    enabled_count += 1;
-                    ThreadState::Enabled
-                }
-                (true, true) => ThreadState::StackEmpty,
-                (false, true) => ThreadState::Terminated,
-                (false, false) => ThreadState::Blocked,
-            };
-        }
-        // Once there are no threads with non-empty stacks anymore, we allow scheduling threads with empty stacks:
-        // TODO GENMC: decide if this can only happen for the main thread:
-        if enabled_count == 0 {
-            for thread_state in threads_state.iter_mut().rev() {
-                if ThreadState::StackEmpty == *thread_state {
-                    *thread_state = ThreadState::Enabled;
-                    enabled_count += 1;
-                    break;
-                }
-            }
-            assert_ne!(0, enabled_count);
-        }
-        // TODO GENMC (OPTIMIZATION): could possibly skip scheduling call to GenMC if we only have 1 enabled thread
-
-        info!("GenMC: schedule_thread: thread states: {threads_state:?}");
+        info!("GenMC: schedule_thread: thread states: {thread_states:?}");
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut().expect("model checker should not be null");
-        let result = pinned_mc.scheduleNext(&threads_state);
+        let result = pinned_mc.scheduleNext(&thread_states);
         info!("GenMC: scheduling result: {result}");
         if result >= 0 {
             let genmc_next_thread_id = GenmcThreadIdInner::try_from(result).unwrap();
             assert_eq!(
-                threads_state.get(usize::try_from(genmc_next_thread_id).unwrap()),
+                thread_states.get(usize::try_from(genmc_next_thread_id).unwrap()),
                 Some(&ThreadState::Enabled)
             );
             // TODO GENMC: can we ensure this thread_id is valid?
             let genmc_next_thread_id = GenmcThreadId(genmc_next_thread_id);
+            let thread_infos = self.thread_infos.borrow();
             let next_thread_id = thread_infos.get_info_genmc(genmc_next_thread_id).miri_tid;
             info!(
                 "GenMC: next thread to run is {next_thread_id:?} ({genmc_next_thread_id:?}), total {} threads",
-                threads_state.len()
+                thread_states.len()
             );
             interp_ok(next_thread_id)
         } else {
             // Negative result means there is no next thread to schedule
             info!(
-                "GenMC: scheduleNext returned no thread to schedule. Thread states: {threads_state:?}"
+                "GenMC: scheduleNext returned no thread to schedule. Thread states: {thread_states:?}"
             );
             // TODO GENMC: stop the current execution and check if there are more if this happens
             // TODO GENMC: maybe add a new `throw_*` for these cases? new InterpErrorKind?
@@ -1050,6 +1022,55 @@ impl GenmcCtx {
         let old_value = rmw_result.old_value;
         let old_value_scalar = genmc_scalar_to_scalar(old_value, size);
         interp_ok((old_value_scalar, rmw_result.is_success))
+    }
+
+    // TODO GENMC: optimize this:
+    fn get_thread_states<'tcx>(
+        &self,
+        thread_manager: &ThreadManager<'tcx>,
+    ) -> (Vec<ThreadState>, usize) {
+        let thread_infos = self.thread_infos.borrow();
+        let thread_count = thread_infos.thread_count();
+
+        // TODO GENMC: improve performance, e.g., with SmallVec
+        let mut thread_states: Vec<ThreadState> = vec![ThreadState::Terminated; thread_count];
+
+        let mut enabled_count = 0;
+        for (thread_id, thread) in thread_manager.threads_ref().iter_enumerated() {
+            // If a thread is finished, there might still be something to do (see `src/concurrency/thread.rs`: `run_on_stack_empty`)
+            // In that case, the thread is still enabled, but has an empty stack
+            // We don't want to run this thread in GenMC mode (especially not the main thread, which terminates the program once it's done)
+            // We tell GenMC that this thread is disabled
+            let is_enabled = thread.get_state().is_enabled();
+            // TODO GENMC:
+            // let is_finished = thread.top_user_relevant_frame().is_none();
+            // let user_code_finished = thread_infos.get_info(thread_id).user_code_finished;
+            let thread_info = thread_infos.get_info(thread_id);
+            let user_code_finished = thread_info.user_code_finished;
+            let index = usize::try_from(thread_info.genmc_tid.0).unwrap();
+            thread_states[index] = match (is_enabled, user_code_finished) {
+                (true, false) => {
+                    enabled_count += 1;
+                    ThreadState::Enabled
+                }
+                (true, true) => ThreadState::StackEmpty,
+                (false, true) => ThreadState::Terminated,
+                (false, false) => ThreadState::Blocked,
+            };
+        }
+        // Once there are no threads with non-empty stacks anymore, we allow scheduling threads with empty stacks:
+        // TODO GENMC: decide if this can only happen for the main thread:
+        if enabled_count == 0 {
+            for thread_state in thread_states.iter_mut().rev() {
+                if ThreadState::StackEmpty == *thread_state {
+                    *thread_state = ThreadState::Enabled;
+                    enabled_count += 1;
+                    break;
+                }
+            }
+        }
+        // TODO GENMC (OPTIMIZATION): could possibly skip scheduling call to GenMC if we only have 1 enabled thread (WARNING: may not be correct with GenMC BlockLabels)
+        (thread_states, enabled_count)
     }
 }
 
