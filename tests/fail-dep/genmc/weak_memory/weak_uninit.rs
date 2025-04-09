@@ -38,7 +38,7 @@ extern "C" fn thread_1(_value: *mut c_void) -> *mut c_void {
 extern "C" fn thread_2(_value: *mut c_void) -> *mut c_void {
     unsafe {
         let x = AtomicUsize::from_ptr(&raw mut F as *mut usize);
-        x.load(Ordering::Relaxed); //~ERROR: access violation, data race or IPR validity broken
+        x.load(Ordering::Relaxed); //~ERROR: TODO GENMC: checkForRaces failed
         std::ptr::null_mut()
     }
 }
