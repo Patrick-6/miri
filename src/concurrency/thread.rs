@@ -852,6 +852,11 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
     #[inline]
     fn run_on_stack_empty(&mut self) -> InterpResult<'tcx, Poll<()>> {
         let this = self.eval_context_mut();
+        if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
+            let thread_id = this.active_thread();
+            // TODO GENMC: is this the correct place to put this?
+            genmc_ctx.thread_stack_empty(thread_id);
+        }
         let mut callback = this
             .active_thread_mut()
             .on_stack_empty
