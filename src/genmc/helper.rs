@@ -8,7 +8,7 @@ pub fn scalar_to_genmc_scalar(value: Scalar) -> u64 {
     match value {
         rustc_const_eval::interpret::Scalar::Int(scalar_int) =>
             scalar_int.to_uint(scalar_int.size()).try_into().unwrap(), // TODO GENMC: doesn't work for size != 8
-        rustc_const_eval::interpret::Scalar::Ptr(_pointer, _size) => todo!(), // pointer.into_parts().1.bytes(),
+        rustc_const_eval::interpret::Scalar::Ptr(_pointer, _size) => todo!("No Pointers in GenMC mode yet :("), // pointer.into_parts().1.bytes(),
     }
 }
 
