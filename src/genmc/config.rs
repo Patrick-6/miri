@@ -29,6 +29,13 @@ impl Default for GenmcParams {
 
 impl GenmcConfig {
     pub fn set_graph_printing(&mut self, param: &str) {
+        if !param.starts_with("=") {
+            // TODO GENMC: find a good default here:
+            self.print_graph = GenmcPrintGraphSetting::First;
+            return;
+        }
+        // Remove the equals:
+        let param = &param[1..];
         self.print_graph = match param {
             "none" | "false" | "" => GenmcPrintGraphSetting::None,
             "first" | "true" => GenmcPrintGraphSetting::First,

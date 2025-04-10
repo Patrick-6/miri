@@ -674,7 +674,7 @@ fn main() {
             // TODO GENMC: make sure this isn't reactivated by other flags
             miri_config.data_race_detector = false;
             miri_config.weak_memory_emulation = false;
-        } else if let Some(param) = arg.strip_prefix("-Zmiri-genmc-print-graph=") {
+        } else if let Some(param) = arg.strip_prefix("-Zmiri-genmc-print-graph") {
             // TODO GENMC (DOCUMENTATION)
             if let Some(genmc_config) = &mut miri_config.genmc_config {
                 genmc_config.set_graph_printing(param);
