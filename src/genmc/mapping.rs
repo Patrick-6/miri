@@ -2,12 +2,8 @@ use super::ffi::{MemoryOrdering, RmwBinOp};
 use crate::intrinsics::AtomicOp;
 use crate::{AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd};
 
-pub(super) trait ToGenmcMemoryOrdering {
-    fn convert(self) -> MemoryOrdering;
-}
-
-impl ToGenmcMemoryOrdering for AtomicReadOrd {
-    fn convert(self) -> MemoryOrdering {
+impl AtomicReadOrd {
+    pub(super) fn convert(self) -> MemoryOrdering {
         match self {
             AtomicReadOrd::Relaxed => MemoryOrdering::Relaxed,
             AtomicReadOrd::Acquire => MemoryOrdering::Acquire,
@@ -16,8 +12,8 @@ impl ToGenmcMemoryOrdering for AtomicReadOrd {
     }
 }
 
-impl ToGenmcMemoryOrdering for AtomicWriteOrd {
-    fn convert(self) -> MemoryOrdering {
+impl AtomicWriteOrd {
+    pub(super) fn convert(self) -> MemoryOrdering {
         match self {
             AtomicWriteOrd::Relaxed => MemoryOrdering::Relaxed,
             AtomicWriteOrd::Release => MemoryOrdering::Release,
@@ -26,8 +22,8 @@ impl ToGenmcMemoryOrdering for AtomicWriteOrd {
     }
 }
 
-impl ToGenmcMemoryOrdering for AtomicFenceOrd {
-    fn convert(self) -> MemoryOrdering {
+impl AtomicFenceOrd {
+    pub(super) fn convert(self) -> MemoryOrdering {
         match self {
             AtomicFenceOrd::Acquire => MemoryOrdering::Acquire,
             AtomicFenceOrd::Release => MemoryOrdering::Release,
@@ -36,8 +32,6 @@ impl ToGenmcMemoryOrdering for AtomicFenceOrd {
         }
     }
 }
-
-// TODO: add methods for this conversion:
 
 impl AtomicRwOrd {
     pub(super) fn to_genmc_memory_orderings(self) -> (MemoryOrdering, MemoryOrdering) {
