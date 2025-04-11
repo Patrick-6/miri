@@ -47,6 +47,9 @@ extern "C" fn thread_2(_value: *mut c_void) -> *mut c_void {
 fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
     // Unlike with the non-GenMC version of this test, we should only need 1 iteration to detect the bug:
     unsafe {
+        // TODO GENMC (HACK): access the global:
+        F = F;
+
         let ids = create_pthreads_no_params([thread_1, thread_2]);
         join_pthreads(ids);
     }

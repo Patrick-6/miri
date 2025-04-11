@@ -740,6 +740,8 @@ impl<'tcx> ThreadManager<'tcx> {
         clock: &MonotonicClock,
         concurrency_handler: &ConcurrencyHandler,
     ) -> InterpResult<'tcx, SchedulingAction> {
+        // TODO GENMC: move GenMC scheduling here <===
+
         // This thread and the program can keep going.
         if self.threads[self.active_thread].state.is_enabled() && !self.yield_active_thread {
             // The currently active thread is still enabled, just continue with it.
