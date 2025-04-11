@@ -214,7 +214,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
             let is_unsigned = matches!(rhs.layout.ty.kind(), ty::Uint(_));
             // TODO GENMC: do we need the `is_success` value?
             let (old, _is_success) = genmc_ctx.atomic_rmw_op(
-                &this.machine,
+                this,
                 address,
                 size,
                 atomic,
@@ -262,7 +262,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
             let address = place.ptr().addr();
             let size = place.layout.size;
             // TODO GENMC: do we need the `is_success` value?
-            let (old, _is_success) = genmc_ctx.atomic_exchange(&this.machine, address, size, new, atomic)?;
+            let (old, _is_success) = genmc_ctx.atomic_exchange(this, address, size, new, atomic)?;
             this.write_scalar(old, dest)?; // old value is returned
         }
 
@@ -288,17 +288,16 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
             let address = place.ptr().addr();
             let size = place.layout.size;
             let expect_old_scalar = this.read_scalar(expect_old)?;
-            let (old, cmpxchg_success) = genmc_ctx
-                .atomic_compare_exchange(
-                    &this.machine,
-                    address,
-                    size,
-                    expect_old_scalar,
-                    new,
-                    success,
-                    fail,
-                    can_fail_spuriously,
-                )?;
+            let (old, cmpxchg_success) = genmc_ctx.atomic_compare_exchange(
+                this,
+                address,
+                size,
+                expect_old_scalar,
+                new,
+                success,
+                fail,
+                can_fail_spuriously,
+            )?;
 
             let old = Immediate::ScalarPair(old, Scalar::from_bool(cmpxchg_success));
 

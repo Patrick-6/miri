@@ -180,7 +180,18 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
                     optimizations is usually marginal at best.");
         }
 
-        let genmc_ctx = config.genmc_config.as_ref().map(GenmcCtx::new).map(Rc::new);
+        let genmc_ctx = config
+            .genmc_config
+            .as_ref()
+            .map(|genmc_config| {
+                // FIXME: Currently GenMC mode incompatible with aliasing model checking
+                assert_eq!(
+                    None, config.borrow_tracker,
+                    "FIXME: GenMC Mode is incompatible with aliasing model checking"
+                );
+                GenmcCtx::new(genmc_config)
+            })
+            .map(Rc::new);
         // TODO GENMC: handle this:
         assert!(
             !(self.many_seeds.is_some() && config.genmc_config.is_some()),
@@ -674,6 +685,9 @@ fn main() {
             // TODO GENMC: make sure this isn't reactivated by other flags
             miri_config.data_race_detector = false;
             miri_config.weak_memory_emulation = false;
+
+            // FIXME: Currently GenMC mode incompatible with aliasing model checking
+            miri_config.borrow_tracker = None;
         } else if let Some(param) = arg.strip_prefix("-Zmiri-genmc-print-graph") {
             // TODO GENMC (DOCUMENTATION)
             if let Some(genmc_config) = &mut miri_config.genmc_config {

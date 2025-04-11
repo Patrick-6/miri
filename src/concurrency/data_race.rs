@@ -706,7 +706,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
             // TODO GENMC: handling mixed atomics/non-atomics:
             let old_val = None;
             // let old_val = this.run_for_validation_ref(|this| this.read_scalar(place)).discard_err();
-            genmc_ctx.atomic_load(&this.machine, address, size, atomic, old_val)
+            genmc_ctx.atomic_load(this, address, size, atomic, old_val)
         } else {
             // TODO GENMC: this may need to be replaced, and the value should be requested from GenMC instead:
             let scalar = this.allow_data_races_ref(move |this| this.read_scalar(place))?;
@@ -743,7 +743,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
             let address = dest.ptr().addr();
             let size = dest.layout.size;
-            genmc_ctx.atomic_store(&this.machine, address, size, val, atomic)?;
+            genmc_ctx.atomic_store(this, address, size, val, atomic)?;
         }
 
         // TODO GENMC: is this required in GenMC mode?:
