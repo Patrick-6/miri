@@ -740,7 +740,18 @@ impl<'tcx> ThreadManager<'tcx> {
         clock: &MonotonicClock,
         concurrency_handler: &ConcurrencyHandler,
     ) -> InterpResult<'tcx, SchedulingAction> {
-        // TODO GENMC: move GenMC scheduling here <===
+        if let Some(genmc_ctx) = concurrency_handler.as_genmc_ref() {
+            if let Some(sleep_time) = self.next_callback_wait_time(clock) {
+                throw_unsup_format!("TODO GENMC: implement sleep with GenMC (requested sleep for {} ns)", sleep_time.as_nanos());
+            }
+
+            let next_thread_id = genmc_ctx.schedule_thread(self)?;
+            self.active_thread = next_thread_id;
+            self.yield_active_thread = false;
+
+            assert!(self.threads[self.active_thread].state.is_enabled());
+            return interp_ok(SchedulingAction::ExecuteStep);
+        }
 
         // This thread and the program can keep going.
         if self.threads[self.active_thread].state.is_enabled() && !self.yield_active_thread {
@@ -767,30 +778,26 @@ impl<'tcx> ThreadManager<'tcx> {
         // active thread.
         //
 
-        if let Some(genmc_ctx) = concurrency_handler.as_genmc_ref() {
-            let next_thread_id = genmc_ctx.schedule_thread(self)?;
-            self.active_thread = next_thread_id;
-        } else {
-            // TODO GENMC: in GenMC mode, ask GenMC for the next thread to schedule
-            // TODO GENMC: should this be affected by the seed given to Miri? (e.g., choose random unblocked thread, potentially including scheduling the same thread again after a yield)
-            let threads = self
-                .threads
-                .iter_enumerated()
-                .skip(self.active_thread.index() + 1)
-                .chain(self.threads.iter_enumerated().take(self.active_thread.index()));
-            for (id, thread) in threads {
-                debug_assert_ne!(self.active_thread, id);
-                if thread.state.is_enabled() {
-                    info!(
-                        "---------- Now executing on thread `{}` (previous: `{}`) ----------------------------------------",
-                        self.get_thread_display_name(id),
-                        self.get_thread_display_name(self.active_thread)
-                    );
-                    self.active_thread = id;
-                    break;
-                }
+        // TODO GENMC: in GenMC mode, ask GenMC for the next thread to schedule
+        // TODO GENMC: should this be affected by the seed given to Miri? (e.g., choose random unblocked thread, potentially including scheduling the same thread again after a yield)
+        let threads = self
+            .threads
+            .iter_enumerated()
+            .skip(self.active_thread.index() + 1)
+            .chain(self.threads.iter_enumerated().take(self.active_thread.index()));
+        for (id, thread) in threads {
+            debug_assert_ne!(self.active_thread, id);
+            if thread.state.is_enabled() {
+                info!(
+                    "---------- Now executing on thread `{}` (previous: `{}`) ----------------------------------------",
+                    self.get_thread_display_name(id),
+                    self.get_thread_display_name(self.active_thread)
+                );
+                self.active_thread = id;
+                break;
             }
         }
+
         self.yield_active_thread = false;
         if self.threads[self.active_thread].state.is_enabled() {
             return interp_ok(SchedulingAction::ExecuteStep);
