@@ -180,8 +180,8 @@ impl Command {
             Command::Check { flags } => Self::check(flags),
             Command::Test { bless, flags, target, coverage } =>
                 Self::test(bless, flags, target, coverage),
-            Command::Run { dep, verbose, target, edition, flags } =>
-                Self::run(dep, verbose, target, edition, flags),
+            Command::Run { dep, verbose, target, edition, flags, flamegraph } =>
+                Self::run(dep, verbose, target, edition, flags, flamegraph),
             Command::Doc { flags } => Self::doc(flags),
             Command::Fmt { flags } => Self::fmt(flags),
             Command::Clippy { flags } => Self::clippy(flags),
@@ -687,6 +687,7 @@ impl Command {
         target: Option<String>,
         edition: Option<String>,
         flags: Vec<String>,
+        flamegraph: bool,
     ) -> Result<()> {
         let mut e = MiriEnv::new()?;
 
@@ -718,11 +719,14 @@ impl Command {
         // The basic command that executes the Miri driver.
         let mut cmd = if dep {
             // We invoke the test suite as that has all the logic for running with dependencies.
-            e.cargo_cmd(".", "test")
-                .args(&["--test", "ui"])
-                .args(quiet_flag)
-                .arg("--")
-                .args(&["--miri-run-dep-mode"])
+            let cmd = e.cargo_cmd(".", "test").args(&["--test", "ui"]).args(quiet_flag).arg("--");
+            if flamegraph {
+                cmd.args(&["--miri-run-dep-mode-flamegraph"])
+            } else {
+                cmd.args(&["--miri-run-dep-mode"])
+            }
+        } else if flamegraph {
+            cmd!(e.sh, "flamegraph -- {miri_bin}")
         } else {
             cmd!(e.sh, "{miri_bin}")
         };
