@@ -742,7 +742,10 @@ impl<'tcx> ThreadManager<'tcx> {
     ) -> InterpResult<'tcx, SchedulingAction> {
         if let Some(genmc_ctx) = concurrency_handler.as_genmc_ref() {
             if let Some(sleep_time) = self.next_callback_wait_time(clock) {
-                throw_unsup_format!("TODO GENMC: implement sleep with GenMC (requested sleep for {} ns)", sleep_time.as_nanos());
+                throw_unsup_format!(
+                    "TODO GENMC: implement sleep with GenMC (requested sleep for {} ns)",
+                    sleep_time.as_nanos()
+                );
             }
 
             let next_thread_id = genmc_ctx.schedule_thread(self)?;
@@ -813,6 +816,69 @@ impl<'tcx> ThreadManager<'tcx> {
         } else {
             throw_machine_stop!(TerminationInfo::Deadlock);
         }
+    }
+
+    /// TODO GENMC: DOCUMENTATION
+    /// TODO GENMC: where should this be placed?
+    /// TODO GENMC: should this also be inline(always) like `step`?
+    #[inline(always)]
+    pub fn is_next_instr_load(&self, thread_id: ThreadId) -> Option<bool> {
+        let stack = self.threads[thread_id].stack.as_slice();
+        let frame = stack.last()?;
+        let Either::Left(loc) = frame.current_loc() else {
+            todo!("TODO GENMC: can we get here?");
+            // // We are unwinding and this fn has no cleanup code.
+            // // Just go on unwinding.
+            // trace!("unwinding: skipping frame");
+            // self.return_from_current_stack_frame(/* unwinding */ true)?;
+            // return interp_ok(true);
+        };
+        let basic_block = &frame.body().basic_blocks[loc.block];
+
+        if let Some(stmt) = basic_block.statements.get(loc.statement_index) {
+            info!("GenMC: thread {thread_id:?}, next is a statement with kind: {:?}", stmt.kind);
+            use rustc_middle::mir::{NonDivergingIntrinsic, StatementKind};
+            return Some(match &stmt.kind {
+                StatementKind::Deinit(_)
+                | StatementKind::FakeRead(_)
+                | StatementKind::SetDiscriminant { .. }
+                | StatementKind::StorageLive(_)
+                | StatementKind::StorageDead(_)
+                | StatementKind::Retag(..)
+                | StatementKind::PlaceMention(_)
+                | StatementKind::AscribeUserType(..)
+                | StatementKind::Coverage(_)
+                | StatementKind::ConstEvalCounter
+                | StatementKind::Nop
+                | StatementKind::BackwardIncompatibleDropHint { .. } => false,
+                StatementKind::Assign(_) => true, // TODO GENMC: should this be considered a load?
+                StatementKind::Intrinsic(non_diverging_intrinsic) =>
+                    match non_diverging_intrinsic.as_ref() {
+                        NonDivergingIntrinsic::Assume(_) => false,
+                        NonDivergingIntrinsic::CopyNonOverlapping(_) => true, // TODO GENMC: should this be considered a load?
+                    },
+            });
+        }
+        let terminator = basic_block.terminator();
+        info!("GenMC: thread {thread_id:?}, next is a terminator with kind: {:?}", terminator.kind);
+        use rustc_middle::mir::TerminatorKind;
+        Some(match &terminator.kind {
+            TerminatorKind::Goto { .. } => false,
+            TerminatorKind::SwitchInt { .. } => true, // TODO GENMC: should this be considered a load?
+            TerminatorKind::UnwindResume => false,
+            TerminatorKind::UnwindTerminate(_) => false,
+            TerminatorKind::Return => true, // TODO GENMC: should this be considered a load?
+            TerminatorKind::Unreachable => false,
+            TerminatorKind::Drop { .. } => true, // TODO GENMC: should this be considered a load?
+            TerminatorKind::Call { .. } => true, // TODO GENMC: should this be considered a load? Maybe try being more precise
+            TerminatorKind::TailCall { .. } => false, //  // TODO GENMC: should this be considered a load?
+            TerminatorKind::Assert { .. } => true, // TODO GENMC: should this be considered a load?
+            TerminatorKind::Yield { .. } => false,
+            TerminatorKind::CoroutineDrop => false,
+            TerminatorKind::FalseEdge { .. } => false,
+            TerminatorKind::FalseUnwind { .. } => false,
+            TerminatorKind::InlineAsm { .. } => true, // TODO GENMC: should this be considered a load?
+        })
     }
 }
 
@@ -1227,6 +1293,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     /// termination).
     fn run_threads(&mut self) -> InterpResult<'tcx, !> {
         let this = self.eval_context_mut();
+
         loop {
             if CTRL_C_RECEIVED.load(Relaxed) {
                 this.machine.handle_abnormal_termination();
