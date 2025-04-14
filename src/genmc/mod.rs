@@ -13,7 +13,7 @@ use tracing::{info, warn};
 
 use self::ffi::{
     GenmcScalar, MemoryOrdering, MiriGenMCShim, RmwBinOp, StoreEventType, ThreadState,
-    createGenmcHandle,
+    ThreadStateInfo, createGenmcHandle,
 };
 use self::helper::{Threads, genmc_scalar_to_scalar, scalar_to_genmc_scalar};
 use self::thread_info_manager::{GenmcThreadId, GenmcThreadIdInner, ThreadInfoManager};
@@ -92,7 +92,7 @@ mod ffi {
         Terminated = 3, // TODO GENMC: check if any other states/info is needed
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone, Copy)]
     #[allow(unused)] // TODO GENMC: remove once struct is used
     struct ThreadStateInfo {
         state: ThreadState,
@@ -201,7 +201,7 @@ mod ffi {
         fn handleExecutionStart(self: Pin<&mut MiriGenMCShim>);
         fn handleExecutionEnd(
             self: Pin<&mut MiriGenMCShim>,
-            thread_states: &[ThreadState],
+            thread_states: &[ThreadStateInfo],
         ) -> UniquePtr<CxxString>;
 
         fn handleLoad(
@@ -263,12 +263,18 @@ mod ffi {
         /**** Blocking instructions ****/
         fn handleUserBlock(self: Pin<&mut MiriGenMCShim>, thread_id: i32);
 
-        fn scheduleNext(self: Pin<&mut MiriGenMCShim>, thread_states: &[ThreadState]) -> i64;
+        fn scheduleNext(self: Pin<&mut MiriGenMCShim>, thread_states: &[ThreadStateInfo]) -> i64;
         fn isHalting(self: &MiriGenMCShim) -> bool;
         fn isMoot(self: &MiriGenMCShim) -> bool;
         fn isExplorationDone(self: Pin<&mut MiriGenMCShim>) -> bool;
 
         fn printGraph(self: Pin<&mut MiriGenMCShim>);
+    }
+}
+
+impl Default for ThreadStateInfo {
+    fn default() -> Self {
+        Self { state: ThreadState::Terminated, is_next_instr_load: true }
     }
 }
 
@@ -288,7 +294,10 @@ pub struct GenmcCtx {
 
     allow_data_races: Cell<bool>,
 
+    // TODO GENMC: remove this, use GenMC's counter instead (on `GenMCDriver::Result`)
     stuck_execution_count: Cell<usize>,
+
+    curr_thread_user_block: Cell<bool>,
 }
 
 /// Convert an address selected by GenMC into Miri's type for addresses.
@@ -328,8 +337,16 @@ impl GenmcCtx {
         let thread_infos = RefCell::new(ThreadInfoManager::new());
         let allow_data_races = Cell::new(false);
         let stuck_execution_count = Cell::new(0);
+        let curr_thread_user_block = Cell::new(false);
 
-        Self { handle, rng, thread_infos, allow_data_races, stuck_execution_count }
+        Self {
+            handle,
+            rng,
+            thread_infos,
+            allow_data_races,
+            stuck_execution_count,
+            curr_thread_user_block,
+        }
     }
 
     pub fn get_stuck_execution_count(&self) -> usize {
@@ -826,7 +843,22 @@ impl GenmcCtx {
         &self,
         thread_manager: &ThreadManager<'tcx>,
     ) -> InterpResult<'tcx, ThreadId> {
+        info!("GenMC: schedule_thread");
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
+
+        // Skip calling GenMC if not required
+        let active_thread_id = thread_manager.active_thread();
+        // Check if thread might be blocked by a `__VERIFIER_assume` statement or similar:
+        let curr_thread_user_block = self.curr_thread_user_block.replace(false);
+        if !curr_thread_user_block
+            && thread_manager.threads_ref()[active_thread_id].get_state().is_enabled()
+        {
+            if let Some(false) = thread_manager.is_next_instr_load(active_thread_id) {
+                // TODO GENMC: this could possibly be improved by skipping checks done in caller of `schedule_thread`
+                info!("GenMC: schedule_thread: skip calling GenMC for scheduling");
+                return interp_ok(active_thread_id);
+            }
+        }
 
         let (thread_states, enabled_count) = self.get_thread_states(thread_manager);
         assert_ne!(0, enabled_count);
@@ -840,8 +872,8 @@ impl GenmcCtx {
         if result >= 0 {
             let genmc_next_thread_id = GenmcThreadIdInner::try_from(result).unwrap();
             assert_eq!(
-                thread_states.get(usize::try_from(genmc_next_thread_id).unwrap()),
-                Some(&ThreadState::Enabled)
+                thread_states.get(usize::try_from(genmc_next_thread_id).unwrap()).unwrap().state,
+                ThreadState::Enabled
             );
             // TODO GENMC: can we ensure this thread_id is valid?
             let genmc_next_thread_id = GenmcThreadId(genmc_next_thread_id);
@@ -893,19 +925,11 @@ impl GenmcCtx {
     ) -> InterpResult<'tcx, ()> {
         info!("GenMC: handle_verifier_assume, condition: {condition}");
         if !condition {
-            let thread_infos = self.thread_infos.borrow();
-            let curr_thread = machine.threads.active_thread();
-            let genmc_curr_thread = thread_infos.get_info(curr_thread).genmc_tid;
-            info!(
-                "GenMC: handle_verifier_assume, blocking thread {curr_thread:?} ({genmc_curr_thread:?})"
-            );
-
-            let mut mc = self.handle.borrow_mut();
-            let pinned_mc = mc.as_mut().expect("model checker should not be null");
-            pinned_mc.handleUserBlock(genmc_curr_thread.0);
+            self.handle_user_block(machine)
+        } else {
+            // TODO GENMC: is this a terminator, i.e., can GenMC schedule afterwards?
+            interp_ok(())
         }
-        // TODO GENMC: is this a terminator, i.e., can GenMC schedule afterwards?
-        interp_ok(())
     }
 }
 
@@ -973,7 +997,7 @@ impl GenmcCtx {
         let genmc_size = size_to_genmc(size);
 
         info!(
-            "GenMC: store, thread: {curr_thread_id:?} ({genmc_tid:?}), address: {address:?}, size: {size:?}, ordering {memory_ordering:?}, value: {genmc_value:?}"
+            "GenMC: store, thread: {curr_thread_id:?} ({genmc_tid:?}), address: {addr} = {addr:#x}, size: {size:?}, ordering {memory_ordering:?}, value: {genmc_value:?}", addr = address.bytes()
         );
 
         let mut mc = self.handle.borrow_mut();
@@ -1048,12 +1072,13 @@ impl GenmcCtx {
     fn get_thread_states<'tcx>(
         &self,
         thread_manager: &ThreadManager<'tcx>,
-    ) -> (Vec<ThreadState>, usize) {
+    ) -> (Vec<ThreadStateInfo>, usize) {
         let thread_infos = self.thread_infos.borrow();
         let thread_count = thread_infos.thread_count();
 
         // TODO GENMC: improve performance, e.g., with SmallVec
-        let mut thread_states: Vec<ThreadState> = vec![ThreadState::Terminated; thread_count];
+        let mut thread_states: Vec<ThreadStateInfo> =
+            vec![ThreadStateInfo::default(); thread_count];
 
         let mut enabled_count = 0;
         for (thread_id, thread) in thread_manager.threads_ref().iter_enumerated() {
@@ -1068,7 +1093,8 @@ impl GenmcCtx {
             let thread_info = thread_infos.get_info(thread_id);
             let user_code_finished = thread_info.user_code_finished;
             let index = usize::try_from(thread_info.genmc_tid.0).unwrap();
-            thread_states[index] = match (is_enabled, user_code_finished) {
+
+            let state = match (is_enabled, user_code_finished) {
                 (true, false) => {
                     enabled_count += 1;
                     ThreadState::Enabled
@@ -1077,13 +1103,16 @@ impl GenmcCtx {
                 (false, true) => ThreadState::Terminated,
                 (false, false) => ThreadState::Blocked,
             };
+            // TODO GENMC: cache this, only update for current thread (other's don't make progress)
+            let is_next_instr_load = thread_manager.is_next_instr_load(thread_id).unwrap_or(false); // TODO GENMC (SCHEDULING): actually check next instruction
+            thread_states[index] = ThreadStateInfo { state, is_next_instr_load };
         }
         // Once there are no threads with non-empty stacks anymore, we allow scheduling threads with empty stacks:
         // TODO GENMC: decide if this can only happen for the main thread:
         if enabled_count == 0 {
             for thread_state in thread_states.iter_mut().rev() {
-                if ThreadState::StackEmpty == *thread_state {
-                    *thread_state = ThreadState::Enabled;
+                if ThreadState::StackEmpty == thread_state.state {
+                    thread_state.state = ThreadState::Enabled;
                     enabled_count += 1;
                     break;
                 }
@@ -1091,6 +1120,21 @@ impl GenmcCtx {
         }
         // TODO GENMC (OPTIMIZATION): could possibly skip scheduling call to GenMC if we only have 1 enabled thread (WARNING: may not be correct with GenMC BlockLabels)
         (thread_states, enabled_count)
+    }
+
+    fn handle_user_block<'tcx>(&self, machine: &MiriMachine<'tcx>) -> InterpResult<'tcx, ()> {
+        self.curr_thread_user_block.set(true);
+
+        let thread_infos = self.thread_infos.borrow();
+        let curr_thread = machine.threads.active_thread();
+        let genmc_curr_thread = thread_infos.get_info(curr_thread).genmc_tid;
+        info!("GenMC: handle_user_block, blocking thread {curr_thread:?} ({genmc_curr_thread:?})");
+
+        let mut mc = self.handle.borrow_mut();
+        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        pinned_mc.handleUserBlock(genmc_curr_thread.0);
+
+        interp_ok(())
     }
 }
 

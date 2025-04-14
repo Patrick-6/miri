@@ -99,6 +99,7 @@ impl MyStack {
     pub unsafe fn push(&self, value: u64) {
         let node = Node::new_alloc();
         (*node).value = value;
+        (*node).next = AtomicPtr::new(std::ptr::null_mut());
 
         loop {
             let top = self.top.load(Ordering::Acquire);
@@ -116,16 +117,13 @@ impl MyStack {
         // __VERIFIER_hp_t *hp = __VERIFIER_hp_alloc();
         loop {
             top = STACK.top.load(Ordering::Acquire);
+            // top = __VERIFIER_hp_protect(hp, &s->top);
             if top.is_null() {
+                //     __VERIFIER_hp_free(hp);
                 return 0;
             }
-            // top = __VERIFIER_hp_protect(hp, &s->top);
-            // if (top == NULL) {
-            //     __VERIFIER_hp_free(hp);
-            //     return 0;
-            // }
 
-            let next = self.top.load(Ordering::Relaxed);
+            let next = (*top).next.load(Ordering::Relaxed);
             if self.top.compare_exchange(top, next, Ordering::Release, Ordering::Relaxed).is_ok() {
                 break;
             }
@@ -134,7 +132,7 @@ impl MyStack {
         let value = (*top).value;
         /* Reclaim the used slot */
         Node::reclaim(top);
-        Node::free(top);
+        // Node::free(top);
         // __VERIFIER_hp_free(hp);
         return value;
     }
@@ -191,7 +189,7 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
 
     // TODO GENMC: make different tests:
     let readers = 1;
-    let writers = 1;
+    let writers = 2;
     let rdwr = 0;
 
     let num_threads = readers + writers + rdwr;
