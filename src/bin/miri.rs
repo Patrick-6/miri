@@ -688,12 +688,19 @@ fn main() {
 
             // FIXME: Currently GenMC mode incompatible with aliasing model checking
             miri_config.borrow_tracker = None;
+        } else if arg == "-Zmiri-genmc-log-trace" {
+            if let Some(genmc_config) = &mut miri_config.genmc_config {
+                // TODO GENMC: maybe expand to allow more control over log level?
+                genmc_config.set_log_level_trace();
+            } else {
+                todo!("TODO GENMC: Handle GenMC arguments in wrong order");
+            }
         } else if let Some(param) = arg.strip_prefix("-Zmiri-genmc-print-graph") {
             // TODO GENMC (DOCUMENTATION)
             if let Some(genmc_config) = &mut miri_config.genmc_config {
                 genmc_config.set_graph_printing(param);
             } else {
-                todo!("Handle GenMC arguments in wrong order");
+                todo!("TODO GENMC: Handle GenMC arguments in wrong order");
             }
         } else if arg == "-Zmiri-genmc-disable-race-detection" {
             // TODO GENMC (DOCUMENTATION)

@@ -45,10 +45,11 @@ mod ffi {
         #[allow(unused)]
         pub memory_model: String, // TODO GENMC: (is this even needed?) could potentially make this an enum
 
-        pub quiet: bool, // TODO GENMC: maybe make log-level more fine grained
         // pub genmc_seed: u64; // OR: Option<u64>
         pub print_random_schedule_seed: bool,
         pub disable_race_detection: bool,
+        pub quiet: bool, // TODO GENMC: maybe make log-level more fine grained
+        pub log_level_trace: bool,
     }
 
     #[derive(Debug)]
@@ -283,7 +284,6 @@ impl GenmcScalar {
 }
 
 pub struct GenmcCtx {
-    // TODO GENMC: remove this Mutex if possible
     handle: RefCell<UniquePtr<MiriGenMCShim>>,
 
     #[allow(unused)] // TODO GENMC (CLEANUP)
