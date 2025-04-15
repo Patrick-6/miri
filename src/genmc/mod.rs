@@ -36,6 +36,12 @@ pub use self::ffi::GenmcParams;
 /// TODO GENMC: remove this:
 const IGNORE_NON_ATOMICS: bool = false;
 
+/// TODO GENMC: remove this:
+const SKIP_DUMMY_INITIALIZATION: bool = false;
+
+// TODO GENMC: maybe make this selectable? Or make a pre-reserved range for these?
+const ZST_ADDRESS_BUFFER_SIZE: usize = 128 * 1024;
+
 // TODO GENMC: extract the ffi module if possible, to reduce number of required recompilation
 #[cxx::bridge]
 mod ffi {
@@ -299,6 +305,9 @@ pub struct GenmcCtx {
     stuck_execution_count: Cell<usize>,
 
     curr_thread_user_block: Cell<bool>,
+
+    // TODO GENMC (HACK): we make one large allocation to then use for ZSTs, to reduce the number of events we create for GenMC
+    zst_allocation_range: Cell<(usize, usize, usize)>,
 }
 
 /// Convert an address selected by GenMC into Miri's type for addresses.
@@ -339,6 +348,7 @@ impl GenmcCtx {
         let allow_data_races = Cell::new(false);
         let stuck_execution_count = Cell::new(0);
         let curr_thread_user_block = Cell::new(false);
+        let zst_allocation_range = Cell::new((0, 0, 0));
 
         Self {
             handle: non_null_handle,
@@ -347,6 +357,7 @@ impl GenmcCtx {
             allow_data_races,
             stuck_execution_count,
             curr_thread_user_block,
+            zst_allocation_range,
         }
     }
 
@@ -393,6 +404,13 @@ impl GenmcCtx {
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut();
         pinned_mc.handleExecutionStart();
+
+        // We pre-allocate space for ZSTs, so GenMC doesn't need to handle them:
+        // TODO GENMC: why is this returning usize? Shouldn't it be u64?
+        let pinned_mc = mc.as_mut();
+        let addr = pinned_mc.handleMalloc(0, ZST_ADDRESS_BUFFER_SIZE, 1);
+        assert_ne!(addr, 0);
+        self.zst_allocation_range.set((addr, 0, ZST_ADDRESS_BUFFER_SIZE));
     }
 
     pub(crate) fn handle_execution_end<'tcx>(
@@ -404,6 +422,13 @@ impl GenmcCtx {
         info!("Thread states after execution ends: {thread_states:?}");
 
         let mut mc = self.handle.borrow_mut();
+        let pinned_mc = mc.as_mut();
+
+        // Free the space we reserved for ZSTs so there is no leak reported:
+
+        let zst_range = self.zst_allocation_range.get();
+        pinned_mc.handleFree(0, zst_range.0, zst_range.2);
+
         let pinned_mc = mc.as_mut();
         let result = pinned_mc.handleExecutionEnd(&thread_states);
         if let Some(msg) = result.as_ref() {
@@ -655,6 +680,15 @@ impl GenmcCtx {
         alignment: Align,
         memory_kind: MemoryKind,
     ) -> InterpResult<'tcx, u64> {
+        if size.bytes() == 0 {
+            // TODO GENMC: skip telling GenMC about ZST alloc:
+            let (base_addr, offset, max) = self.zst_allocation_range.get();
+            assert!(offset < max);
+            let addr = u64::try_from(base_addr + offset + 1).unwrap();
+            self.zst_allocation_range.set((base_addr, offset + 1, max));
+
+            return interp_ok(addr);
+        }
         // eprintln!(
         //     "handle_alloc ({memory_kind:?}): Custom backtrace: {}",
         //     std::backtrace::Backtrace::force_capture()
@@ -692,10 +726,12 @@ impl GenmcCtx {
             to_miri_size(genmc_address).bytes()
         };
 
-        info!(
-            "GenMC: writing to allocated memory with dummy value: TODO GENMC: handle 'backdating' of allocation"
-        );
-        self.memory_store(machine, Size::from_bytes(chosen_address), size)?;
+        if !SKIP_DUMMY_INITIALIZATION {
+            info!(
+                "GenMC: writing to allocated memory with dummy value: TODO GENMC: handle 'backdating' of allocation"
+            );
+            self.memory_store(machine, Size::from_bytes(chosen_address), size)?;
+        }
 
         interp_ok(chosen_address)
     }
@@ -727,6 +763,10 @@ impl GenmcCtx {
         align: Align,
         kind: MemoryKind,
     ) -> InterpResult<'tcx, ()> {
+        if size.bytes() == 0 {
+            // TODO GENMC: skipping ZST dealloc
+            return interp_ok(());
+        }
         if self.allow_data_races.get() {
             // TODO GENMC: handle this properly, should this be skipped in this mode?
             info!("GenMC: skipping `handle_dealloc`");
@@ -998,7 +1038,8 @@ impl GenmcCtx {
         let genmc_size = size_to_genmc(size);
 
         info!(
-            "GenMC: store, thread: {curr_thread_id:?} ({genmc_tid:?}), address: {addr} = {addr:#x}, size: {size:?}, ordering {memory_ordering:?}, value: {genmc_value:?}", addr = address.bytes()
+            "GenMC: store, thread: {curr_thread_id:?} ({genmc_tid:?}), address: {addr} = {addr:#x}, size: {size:?}, ordering {memory_ordering:?}, value: {genmc_value:?}",
+            addr = address.bytes()
         );
 
         let mut mc = self.handle.borrow_mut();
