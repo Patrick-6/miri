@@ -11,6 +11,7 @@ use rustc_const_eval::interpret::{InterpCx, InterpResult, interp_ok};
 use rustc_middle::{throw_ub_format, throw_unsup_format};
 use tracing::{info, warn};
 
+use self::cxx_extra::NonNullUniquePtr;
 use self::ffi::{
     GenmcScalar, MemoryOrdering, MiriGenMCShim, RmwBinOp, StoreEventType, ThreadState,
     ThreadStateInfo, createGenmcHandle,
@@ -284,7 +285,7 @@ impl GenmcScalar {
 }
 
 pub struct GenmcCtx {
-    handle: RefCell<UniquePtr<MiriGenMCShim>>,
+    handle: RefCell<NonNullUniquePtr<MiriGenMCShim>>,
 
     #[allow(unused)] // TODO GENMC (CLEANUP)
     rng: RefCell<StdRng>, // TODO GENMC: temporary rng for handling scheduling
@@ -328,8 +329,8 @@ impl GenmcCtx {
         }
 
         let handle = createGenmcHandle(&config.params);
-        assert!(!handle.is_null());
-        let handle = RefCell::new(handle);
+        let non_null_handle = NonNullUniquePtr::new(handle).expect("GenMC should not return null");
+        let non_null_handle = RefCell::new(non_null_handle);
 
         let seed = 0;
         let rng = RefCell::new(StdRng::seed_from_u64(seed));
@@ -340,7 +341,7 @@ impl GenmcCtx {
         let curr_thread_user_block = Cell::new(false);
 
         Self {
-            handle,
+            handle: non_null_handle,
             rng,
             thread_infos,
             allow_data_races,
@@ -357,7 +358,7 @@ impl GenmcCtx {
     pub fn print_genmc_graph(&self) {
         info!("GenMC: print the Execution graph");
         let mut mc = self.handle.borrow_mut();
-        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        let pinned_mc = mc.as_mut();
         pinned_mc.printGraph();
     }
 
@@ -365,20 +366,20 @@ impl GenmcCtx {
         // TODO GENMC: this probably shouldn't be exposed
         info!("GenMC: ask if execution is halting");
         let mc = self.handle.borrow();
-        mc.isHalting()
+        mc.as_ref().isHalting()
     }
 
     pub fn is_moot(&self) -> bool {
         // TODO GENMC: this probably shouldn't be exposed
         info!("GenMC: ask if execution is moot");
         let mc = self.handle.borrow();
-        mc.isMoot()
+        mc.as_ref().isMoot()
     }
 
     pub fn is_exploration_done(&self) -> bool {
         info!("GenMC: ask if execution exploration is done");
         let mut mc = self.handle.borrow_mut();
-        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        let pinned_mc = mc.as_mut();
         pinned_mc.isExplorationDone()
     }
 
@@ -390,7 +391,7 @@ impl GenmcCtx {
         self.thread_infos.borrow_mut().reset();
 
         let mut mc = self.handle.borrow_mut();
-        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        let pinned_mc = mc.as_mut();
         pinned_mc.handleExecutionStart();
     }
 
@@ -403,7 +404,7 @@ impl GenmcCtx {
         info!("Thread states after execution ends: {thread_states:?}");
 
         let mut mc = self.handle.borrow_mut();
-        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        let pinned_mc = mc.as_mut();
         let result = pinned_mc.handleExecutionEnd(&thread_states);
         if let Some(msg) = result.as_ref() {
             let msg = msg.to_string_lossy().to_string();
@@ -473,7 +474,7 @@ impl GenmcCtx {
         let genmc_tid = thread_infos.get_info(curr_thread).genmc_tid;
 
         let mut mc = self.handle.borrow_mut();
-        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        let pinned_mc = mc.as_mut();
         pinned_mc.handleFence(genmc_tid.0, ordering);
 
         // TODO GENMC: can this operation ever fail?
@@ -574,7 +575,7 @@ impl GenmcCtx {
         let genmc_new_value = scalar_to_genmc_scalar(ecx, new_value)?;
 
         let mut mc = self.handle.borrow_mut();
-        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        let pinned_mc = mc.as_mut();
         let cas_result = pinned_mc.handleCompareExchange(
             genmc_tid.0,
             genmc_address,
@@ -680,7 +681,7 @@ impl GenmcCtx {
 
         let chosen_address = {
             let mut mc = self.handle.borrow_mut();
-            let pinned_mc = mc.as_mut().expect("model checker should not be null");
+            let pinned_mc = mc.as_mut();
             let genmc_address = pinned_mc.handleMalloc(genmc_tid.0, genmc_size, alignment);
             info!("GenMC: handle_alloc: got address '{genmc_address}' ({genmc_address:#x})");
 
@@ -744,7 +745,7 @@ impl GenmcCtx {
         let genmc_size = size_to_genmc(size).max(1);
 
         let mut mc = self.handle.borrow_mut();
-        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        let pinned_mc = mc.as_mut();
         pinned_mc.handleFree(genmc_tid.0, genmc_address, genmc_size);
 
         // TODO GENMC (ERROR HANDLING): can this ever fail?
@@ -770,7 +771,7 @@ impl GenmcCtx {
         );
 
         let mut mc = self.handle.borrow_mut();
-        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        let pinned_mc = mc.as_mut();
         pinned_mc.handleThreadCreate(genmc_new_tid.0, genmc_parent_tid.0);
 
         // TODO GENMC (ERROR HANDLING): can this ever fail?
@@ -795,7 +796,7 @@ impl GenmcCtx {
         );
 
         let mut mc = self.handle.borrow_mut();
-        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        let pinned_mc = mc.as_mut();
         pinned_mc.handleThreadJoin(genmc_curr_tid.0, genmc_child_tid.0);
 
         Ok(())
@@ -818,7 +819,7 @@ impl GenmcCtx {
         );
 
         let mut mc = self.handle.borrow_mut();
-        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        let pinned_mc = mc.as_mut();
         pinned_mc.handleThreadFinish(genmc_tid.0, ret_val);
 
         // TODO GENMC (ERROR HANDLING): can this ever fail?
@@ -866,7 +867,7 @@ impl GenmcCtx {
         info!("GenMC: schedule_thread: thread states: {thread_states:?}");
 
         let mut mc = self.handle.borrow_mut();
-        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        let pinned_mc = mc.as_mut();
         let result = pinned_mc.scheduleNext(&thread_states);
         info!("GenMC: scheduling result: {result}");
         if result >= 0 {
@@ -963,7 +964,7 @@ impl GenmcCtx {
         let genmc_size = size_to_genmc(size);
 
         let mut mc = self.handle.borrow_mut();
-        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        let pinned_mc = mc.as_mut();
         let load_result =
             pinned_mc.handleLoad(genmc_tid.0, genmc_address, genmc_size, memory_ordering);
 
@@ -1001,7 +1002,7 @@ impl GenmcCtx {
         );
 
         let mut mc = self.handle.borrow_mut();
-        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        let pinned_mc = mc.as_mut();
         let store_result = pinned_mc.handleStore(
             genmc_tid.0,
             genmc_address,
@@ -1046,7 +1047,7 @@ impl GenmcCtx {
         let genmc_rhs = scalar_to_genmc_scalar(ecx, rhs_scalar)?;
 
         let mut mc = self.handle.borrow_mut();
-        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        let pinned_mc = mc.as_mut();
         let rmw_result = pinned_mc.handleReadModifyWrite(
             genmc_tid.0,
             genmc_address,
@@ -1131,7 +1132,7 @@ impl GenmcCtx {
         info!("GenMC: handle_user_block, blocking thread {curr_thread:?} ({genmc_curr_thread:?})");
 
         let mut mc = self.handle.borrow_mut();
-        let pinned_mc = mc.as_mut().expect("model checker should not be null");
+        let pinned_mc = mc.as_mut();
         pinned_mc.handleUserBlock(genmc_curr_thread.0);
 
         interp_ok(())
