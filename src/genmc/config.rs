@@ -20,9 +20,10 @@ impl Default for GenmcParams {
     fn default() -> Self {
         Self {
             memory_model: "RC11".into(),
-            quiet: true,
             print_random_schedule_seed: false,
             disable_race_detection: false,
+            quiet: true,
+            log_level_trace: false,
         }
     }
 }
@@ -43,5 +44,10 @@ impl GenmcConfig {
             "all" => GenmcPrintGraphSetting::All,
             _ => todo!("Unsupported argument"),
         }
+    }
+
+    pub fn set_log_level_trace(&mut self) {
+        self.params.quiet = false;
+        self.params.log_level_trace = true;
     }
 }
