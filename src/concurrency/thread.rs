@@ -493,6 +493,11 @@ impl<'tcx> ThreadManager<'tcx> {
         &mut self.threads[self.active_thread].stack
     }
 
+    /// TODO GENMC: this function can probably be removed once the GenmcCtx code is finished:
+    pub fn get_thread_stack(&self, id: ThreadId) -> &[Frame<'tcx, Provenance, FrameExtra<'tcx>>] {
+        &self.threads[id].stack
+    }
+
     pub fn all_stacks(
         &self,
     ) -> impl Iterator<Item = (ThreadId, &[Frame<'tcx, Provenance, FrameExtra<'tcx>>])> {
@@ -736,26 +741,36 @@ impl<'tcx> ThreadManager<'tcx> {
     /// long as we can and switch only when we have to (the active thread was
     /// blocked, terminated, or has explicitly asked to be preempted).
     fn schedule(
-        &mut self,
-        clock: &MonotonicClock,
-        concurrency_handler: &ConcurrencyHandler,
+        ecx: &mut InterpCx<'tcx, MiriMachine<'tcx>>,
     ) -> InterpResult<'tcx, SchedulingAction> {
-        if let Some(genmc_ctx) = concurrency_handler.as_genmc_ref() {
-            if let Some(sleep_time) = self.next_callback_wait_time(clock) {
+        // TODO GENMC (Scheduler): should this function still be here? Maybe method on `InterpCx` instead?
+
+        let clock = &ecx.machine.monotonic_clock;
+
+        if let Some(genmc_ctx) = ecx.machine.concurrency_handler.as_genmc_ref() {
+            let thread_manager = &ecx.machine.threads;
+            if let Some(sleep_time) = thread_manager.next_callback_wait_time(clock) {
                 throw_unsup_format!(
                     "TODO GENMC: implement sleep with GenMC (requested sleep for {} ns)",
                     sleep_time.as_nanos()
                 );
             }
 
-            let next_thread_id = genmc_ctx.schedule_thread(self)?;
-            self.active_thread = next_thread_id;
-            self.yield_active_thread = false;
+            let next_thread_id = genmc_ctx.schedule_thread(thread_manager, ecx)?;
 
-            assert!(self.threads[self.active_thread].state.is_enabled());
+            let thread_manager = &mut ecx.machine.threads;
+            thread_manager.active_thread = next_thread_id;
+            thread_manager.yield_active_thread = false;
+
+            assert!(thread_manager.threads[thread_manager.active_thread].state.is_enabled());
             return interp_ok(SchedulingAction::ExecuteStep);
         }
 
+        ecx.machine.threads.schedule_impl(clock)
+    }
+
+    // TODO GENMC (SCHEDULER): Document this:
+    fn schedule_impl(&mut self, clock: &MonotonicClock) -> InterpResult<'tcx, SchedulingAction> {
         // This thread and the program can keep going.
         if self.threads[self.active_thread].state.is_enabled() && !self.yield_active_thread {
             // The currently active thread is still enabled, just continue with it.
@@ -781,8 +796,6 @@ impl<'tcx> ThreadManager<'tcx> {
         // active thread.
         //
 
-        // TODO GENMC: in GenMC mode, ask GenMC for the next thread to schedule
-        // TODO GENMC: should this be affected by the seed given to Miri? (e.g., choose random unblocked thread, potentially including scheduling the same thread again after a yield)
         let threads = self
             .threads
             .iter_enumerated()
@@ -816,69 +829,6 @@ impl<'tcx> ThreadManager<'tcx> {
         } else {
             throw_machine_stop!(TerminationInfo::Deadlock);
         }
-    }
-
-    /// TODO GENMC: DOCUMENTATION
-    /// TODO GENMC: where should this be placed?
-    /// TODO GENMC: should this also be inline(always) like `step`?
-    #[inline(always)]
-    pub fn is_next_instr_load(&self, thread_id: ThreadId) -> Option<bool> {
-        let stack = self.threads[thread_id].stack.as_slice();
-        let frame = stack.last()?;
-        let Either::Left(loc) = frame.current_loc() else {
-            todo!("TODO GENMC: can we get here?");
-            // // We are unwinding and this fn has no cleanup code.
-            // // Just go on unwinding.
-            // trace!("unwinding: skipping frame");
-            // self.return_from_current_stack_frame(/* unwinding */ true)?;
-            // return interp_ok(true);
-        };
-        let basic_block = &frame.body().basic_blocks[loc.block];
-
-        if let Some(stmt) = basic_block.statements.get(loc.statement_index) {
-            info!("GenMC: thread {thread_id:?}, next is a statement with kind: {:?}", stmt.kind);
-            use rustc_middle::mir::{NonDivergingIntrinsic, StatementKind};
-            return Some(match &stmt.kind {
-                StatementKind::Deinit(_)
-                | StatementKind::FakeRead(_)
-                | StatementKind::SetDiscriminant { .. }
-                | StatementKind::StorageLive(_)
-                | StatementKind::StorageDead(_)
-                | StatementKind::Retag(..)
-                | StatementKind::PlaceMention(_)
-                | StatementKind::AscribeUserType(..)
-                | StatementKind::Coverage(_)
-                | StatementKind::ConstEvalCounter
-                | StatementKind::Nop
-                | StatementKind::BackwardIncompatibleDropHint { .. } => false,
-                StatementKind::Assign(_) => true, // TODO GENMC: should this be considered a load?
-                StatementKind::Intrinsic(non_diverging_intrinsic) =>
-                    match non_diverging_intrinsic.as_ref() {
-                        NonDivergingIntrinsic::Assume(_) => false,
-                        NonDivergingIntrinsic::CopyNonOverlapping(_) => true, // TODO GENMC: should this be considered a load?
-                    },
-            });
-        }
-        let terminator = basic_block.terminator();
-        info!("GenMC: thread {thread_id:?}, next is a terminator with kind: {:?}", terminator.kind);
-        use rustc_middle::mir::TerminatorKind;
-        Some(match &terminator.kind {
-            TerminatorKind::Goto { .. } => false,
-            TerminatorKind::SwitchInt { .. } => true, // TODO GENMC: should this be considered a load?
-            TerminatorKind::UnwindResume => false,
-            TerminatorKind::UnwindTerminate(_) => false,
-            TerminatorKind::Return => true, // TODO GENMC: should this be considered a load?
-            TerminatorKind::Unreachable => false,
-            TerminatorKind::Drop { .. } => true, // TODO GENMC: should this be considered a load?
-            TerminatorKind::Call { .. } => true, // TODO GENMC: should this be considered a load? Maybe try being more precise
-            TerminatorKind::TailCall { .. } => false, //  // TODO GENMC: should this be considered a load?
-            TerminatorKind::Assert { .. } => true, // TODO GENMC: should this be considered a load?
-            TerminatorKind::Yield { .. } => false,
-            TerminatorKind::CoroutineDrop => false,
-            TerminatorKind::FalseEdge { .. } => false,
-            TerminatorKind::FalseUnwind { .. } => false,
-            TerminatorKind::InlineAsm { .. } => true, // TODO GENMC: should this be considered a load?
-        })
     }
 }
 
@@ -1299,11 +1249,12 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 this.machine.handle_abnormal_termination();
                 throw_machine_stop!(TerminationInfo::Interrupted);
             }
-            match this
-                .machine
-                .threads
-                .schedule(&this.machine.monotonic_clock, &this.machine.concurrency_handler)?
-            {
+            // TODO GENMC (SCHEDULER):
+            // match this.machine.threads.schedule(
+            //     /* this,*/ &this.machine.monotonic_clock,
+            //     &this.machine.concurrency_handler,
+            // )? {
+            match ThreadManager::schedule(this)? {
                 SchedulingAction::ExecuteStep => {
                     if !this.step()? {
                         // See if this thread can do something else.

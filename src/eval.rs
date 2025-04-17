@@ -528,7 +528,7 @@ pub fn eval_entry<'tcx>(
     // TODO GENMC: is this the correct place to put this?
     if let Some(genmc_ctx) = ecx.machine.concurrency_handler.as_genmc_ref() {
         // TODO GENMC: proper error handling: how to correctly report an error here?
-        if let Err(error) = genmc_ctx.handle_execution_end(&ecx.machine.threads) {
+        if let Err(error) = genmc_ctx.handle_execution_end(&ecx.machine.threads, &ecx) {
             tcx.dcx().err(format!("GenMC returned an error: \"{error}\""));
             return None;
         }

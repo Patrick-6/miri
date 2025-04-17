@@ -16,7 +16,10 @@ use self::ffi::{
     GenmcScalar, MemoryOrdering, MiriGenMCShim, RmwBinOp, StoreEventType, ThreadState,
     ThreadStateInfo, createGenmcHandle,
 };
-use self::helper::{Threads, genmc_scalar_to_scalar, scalar_to_genmc_scalar};
+use self::helper::{
+    NextInstrInfo, Threads, genmc_scalar_to_scalar, get_next_instr_info,
+    rhs_scalar_to_genmc_scalar, scalar_to_genmc_scalar,
+};
 use self::thread_info_manager::{GenmcThreadId, GenmcThreadIdInner, ThreadInfoManager};
 use crate::intrinsics::AtomicOp;
 use crate::{
@@ -416,9 +419,10 @@ impl GenmcCtx {
     pub(crate) fn handle_execution_end<'tcx>(
         &self,
         thread_manager: &ThreadManager<'tcx>,
+        ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
     ) -> Result<(), String> {
         info!("GenMC: inform GenMC that execution ended!");
-        let (thread_states, _enabled_count) = self.get_thread_states(thread_manager);
+        let (thread_states, _enabled_count) = self.get_thread_states(thread_manager, ecx);
         info!("Thread states after execution ends: {thread_states:?}");
 
         let mut mc = self.handle.borrow_mut();
@@ -522,6 +526,7 @@ impl GenmcCtx {
         tracing::info!(
             "GenMC: atomic_rmw_op (op: {genmc_rmw_op:?}): rhs value: {rhs_scalar:?}, is_unsigned: {is_unsigned}, orderings ({load_ordering:?}, {store_ordering:?})"
         );
+        let genmc_rhs_scalar = rhs_scalar_to_genmc_scalar(ecx, rhs_scalar)?;
         self.atomic_rmw_op_impl(
             ecx,
             address,
@@ -529,7 +534,7 @@ impl GenmcCtx {
             load_ordering,
             store_ordering,
             genmc_rmw_op,
-            rhs_scalar,
+            genmc_rhs_scalar,
         )
     }
 
@@ -549,6 +554,7 @@ impl GenmcCtx {
         tracing::info!(
             "GenMC: atomic_exchange (op: {genmc_rmw_op:?}): new value: {rhs_scalar:?}, orderings ({load_ordering:?}, {store_ordering:?})"
         );
+        let genmc_rhs_scalar = scalar_to_genmc_scalar(ecx, rhs_scalar)?;
         self.atomic_rmw_op_impl(
             ecx,
             address,
@@ -556,7 +562,7 @@ impl GenmcCtx {
             load_ordering,
             store_ordering,
             genmc_rmw_op,
-            rhs_scalar,
+            genmc_rhs_scalar,
         )
     }
 
@@ -883,25 +889,51 @@ impl GenmcCtx {
     pub(crate) fn schedule_thread<'tcx>(
         &self,
         thread_manager: &ThreadManager<'tcx>,
+        ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
     ) -> InterpResult<'tcx, ThreadId> {
-        info!("GenMC: schedule_thread");
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
 
-        // Skip calling GenMC if not required
         let active_thread_id = thread_manager.active_thread();
-        // Check if thread might be blocked by a `__VERIFIER_assume` statement or similar:
+        // We need to ask GenMC for a scheduling decision if:
+        // - We are about to execute a MIR Terminator
+        // - The current thread has no more user code to execute (the main thread yields a few times in that case)
+        // - The current thread is blocked
+        // - We just executed a GenMC `UserBlock` (this is not covered by the previous case, since Miri doesn't see `UserBlock`s)
         let curr_thread_user_block = self.curr_thread_user_block.replace(false);
+        let thread_user_code_finished = {
+            let thread_infos = self.thread_infos.borrow();
+            thread_infos.get_info(active_thread_id).user_code_finished
+        };
         if !curr_thread_user_block
+            && !thread_user_code_finished
             && thread_manager.threads_ref()[active_thread_id].get_state().is_enabled()
+            && matches!(
+                get_next_instr_info(ecx, thread_manager, active_thread_id),
+                NextInstrInfo::None | NextInstrInfo::Statement
+            )
         {
-            if let Some(false) = thread_manager.is_next_instr_load(active_thread_id) {
-                // TODO GENMC: this could possibly be improved by skipping checks done in caller of `schedule_thread`
-                info!("GenMC: schedule_thread: skip calling GenMC for scheduling");
-                return interp_ok(active_thread_id);
-            }
+            info!("GenMC: schedule_thread called, but no scheduling decision required...");
+            // TODO GENMC: skip the checks in the calling function in this case:
+            return interp_ok(active_thread_id);
         }
+        info!("GenMC: schedule_thread called on terminator");
 
-        let (thread_states, enabled_count) = self.get_thread_states(thread_manager);
+        // TODO GENMC (PERFORMANCE): maybe re-enable later:
+        // // Skip calling GenMC if not required
+        // let active_thread_id = thread_manager.active_thread();
+        // // Check if thread might be blocked by a `__VERIFIER_assume` statement or similar:
+        // let curr_thread_user_block = self.curr_thread_user_block.replace(false);
+        // if !curr_thread_user_block
+        //     && thread_manager.threads_ref()[active_thread_id].get_state().is_enabled()
+        // {
+        //     if let Some(false) = is_next_instr_load(thread_manager, active_thread_id) {
+        //         // TODO GENMC: this could possibly be improved by skipping checks done in caller of `schedule_thread`
+        //         info!("GenMC: schedule_thread: skip calling GenMC for scheduling");
+        //         return interp_ok(active_thread_id);
+        //     }
+        // }
+
+        let (thread_states, enabled_count) = self.get_thread_states(thread_manager, ecx);
         assert_ne!(0, enabled_count);
 
         info!("GenMC: schedule_thread: thread states: {thread_states:?}");
@@ -1070,7 +1102,7 @@ impl GenmcCtx {
         load_ordering: MemoryOrdering,
         store_ordering: MemoryOrdering,
         genmc_rmw_op: RmwBinOp,
-        rhs_scalar: Scalar,
+        genmc_rhs_scalar: GenmcScalar,
     ) -> InterpResult<'tcx, (Scalar, bool)> {
         let machine = &ecx.machine;
         assert_ne!(0, size.bytes());
@@ -1082,10 +1114,8 @@ impl GenmcCtx {
         let genmc_size = size_to_genmc(size);
 
         info!(
-            "GenMC: atomic_rmw_op, thread: {curr_thread_id:?} ({genmc_tid:?}) (op: {genmc_rmw_op:?}, rhs value: {rhs_scalar:?}), address: {address:?}, size: {size:?}, orderings: ({load_ordering:?}, {store_ordering:?})",
+            "GenMC: atomic_rmw_op, thread: {curr_thread_id:?} ({genmc_tid:?}) (op: {genmc_rmw_op:?}, rhs value: {genmc_rhs_scalar:?}), address: {address:?}, size: {size:?}, orderings: ({load_ordering:?}, {store_ordering:?})",
         );
-
-        let genmc_rhs = scalar_to_genmc_scalar(ecx, rhs_scalar)?;
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut();
@@ -1096,7 +1126,7 @@ impl GenmcCtx {
             load_ordering,
             store_ordering,
             genmc_rmw_op,
-            genmc_rhs,
+            genmc_rhs_scalar,
         );
 
         if let Some(error) = rmw_result.error.as_ref() {
@@ -1114,6 +1144,7 @@ impl GenmcCtx {
     fn get_thread_states<'tcx>(
         &self,
         thread_manager: &ThreadManager<'tcx>,
+        ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
     ) -> (Vec<ThreadStateInfo>, usize) {
         let thread_infos = self.thread_infos.borrow();
         let thread_count = thread_infos.thread_count();
@@ -1146,7 +1177,10 @@ impl GenmcCtx {
                 (false, false) => ThreadState::Blocked,
             };
             // TODO GENMC: cache this, only update for current thread (other's don't make progress)
-            let is_next_instr_load = thread_manager.is_next_instr_load(thread_id).unwrap_or(false); // TODO GENMC (SCHEDULING): actually check next instruction
+            let is_next_instr_load = matches!(
+                get_next_instr_info(ecx, thread_manager, thread_id),
+                NextInstrInfo::MaybeAtomicTerminator
+            ); // TODO GENMC (SCHEDULING): actually check next instruction
             thread_states[index] = ThreadStateInfo { state, is_next_instr_load };
         }
         // Once there are no threads with non-empty stacks anymore, we allow scheduling threads with empty stacks:

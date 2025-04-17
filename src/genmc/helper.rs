@@ -1,16 +1,31 @@
+use either::Either;
 use rustc_abi::Size;
-use rustc_const_eval::interpret::{InterpResult, interp_ok};
+use rustc_const_eval::interpret::{InterpCx, InterpResult, interp_ok};
 use rustc_middle::ty::ScalarInt;
+use tracing::info;
 
 use super::ffi::GenmcScalar;
 use crate::alloc_addresses::EvalContextExt as _;
-use crate::{BorTag, MiriInterpCx, Pointer, Scalar, throw_unsup_format};
+use crate::{
+    BorTag, MiriInterpCx, MiriMachine, Pointer, Provenance, Scalar, ThreadId, ThreadManager,
+    throw_unsup_format,
+};
+
+/// Like `scalar_to_genmc_scalar`, but returns an error if the scalar is not an integer
+pub fn rhs_scalar_to_genmc_scalar<'tcx>(
+    ecx: &MiriInterpCx<'tcx>,
+    scalar: Scalar,
+) -> InterpResult<'tcx, GenmcScalar> {
+    if matches!(scalar, Scalar::Ptr(..)) {
+        throw_unsup_format!("Right hand side of atomic operation cannot be a pointer");
+    }
+    scalar_to_genmc_scalar(ecx, scalar)
+}
 
 pub fn scalar_to_genmc_scalar<'tcx>(
     ecx: &MiriInterpCx<'tcx>,
     scalar: Scalar,
 ) -> InterpResult<'tcx, GenmcScalar> {
-    // TODO GENMC: proper handling of `Scalar`
     interp_ok(match scalar {
         rustc_const_eval::interpret::Scalar::Int(scalar_int) => {
             // TODO GENMC: u128 support
@@ -19,6 +34,9 @@ pub fn scalar_to_genmc_scalar<'tcx>(
         }
         rustc_const_eval::interpret::Scalar::Ptr(pointer, size) => {
             let addr = Pointer::from(pointer).addr();
+            if let Provenance::Wildcard = pointer.provenance {
+                throw_unsup_format!("Pointers with wildcard provenance not allowed in GenMC mode");
+            }
             let (alloc_id, _size, _prov_extra) =
                 rustc_const_eval::interpret::Machine::ptr_get_alloc(ecx, pointer, size.into())
                     .unwrap();
@@ -87,6 +105,60 @@ pub fn genmc_scalar_to_scalar<'tcx>(
         );
     };
     interp_ok(Scalar::Int(value_scalar_int))
+}
+
+pub enum NextInstrInfo {
+    None,
+    Statement,
+    NonAtomicTerminator,
+    MaybeAtomicTerminator,
+}
+
+/// TODO GENMC: DOCUMENTATION
+pub fn get_next_instr_info<'tcx>(
+    _ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
+    thread_manager: &ThreadManager<'tcx>,
+    thread_id: ThreadId,
+) -> NextInstrInfo {
+    let stack = thread_manager.get_thread_stack(thread_id);
+    let Some(frame) = stack.last() else {
+        return NextInstrInfo::None;
+    };
+    let Either::Left(loc) = frame.current_loc() else {
+        todo!("TODO GENMC: can we get here?");
+        // // We are unwinding and this fn has no cleanup code.
+        // // Just go on unwinding.
+        // trace!("unwinding: skipping frame");
+        // self.return_from_current_stack_frame(/* unwinding */ true)?;
+        // return interp_ok(true);
+    };
+    let basic_block = &frame.body().basic_blocks[loc.block];
+
+    if let Some(stmt) = basic_block.statements.get(loc.statement_index) {
+        info!("GenMC: thread {thread_id:?}, next is a statement with kind: {:?}", stmt.kind);
+        return NextInstrInfo::Statement;
+    }
+
+    let terminator = basic_block.terminator();
+    info!("GenMC: thread {thread_id:?}, next is a terminator with kind: {:?}", terminator.kind);
+    use rustc_middle::mir::TerminatorKind;
+    match &terminator.kind {
+        // All atomics are modeled as function calls to intrinsic functions
+        TerminatorKind::Call { func, .. } | TerminatorKind::TailCall { func, .. } => {
+            let _func = func;
+            // TODO GENMC (Scheduler): change once the required function(s) are public in rustc:
+            // match ecx.instantiate_from_current_frame_and_normalize_erasing_regions(func) {
+            //     Ok(func) => todo!(),
+            //     Err(err) => {
+            //         info!("GenMC: error when checking terminator kind: {err:?}");
+            //         return NextInstrInfo::MaybeAtomicTerminator; // TODO GENMC: currently careful, but could return NonAtomic maybe?
+            //     },
+            // }
+            
+            NextInstrInfo::MaybeAtomicTerminator 
+        }
+        _ => NextInstrInfo::NonAtomicTerminator,
+    }
 }
 
 // TODO GENMC (CLEANUP): Remove this:
