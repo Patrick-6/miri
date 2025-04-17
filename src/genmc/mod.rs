@@ -649,10 +649,43 @@ impl GenmcCtx {
         if size.bytes() == 0 {
             return interp_ok(Scalar::from_bool(false)); // TODO GENMC: what should be returned here?
         }
-        let _read_value =
-            self.atomic_load_impl(machine, address, size, MemoryOrdering::NotAtomic)?;
+        // let _read_value =
+        //     self.atomic_load_impl(machine, address, size, MemoryOrdering::NotAtomic)?;
 
-        // TODO GENMC (HACK): to handle large non-atomics, we ignore the value by GenMC for now
+        // // TODO GENMC (HACK): to handle large non-atomics, we ignore the value by GenMC for now
+        // interp_ok(Scalar::from_u64(0xDEADBEEF))
+
+        if size.bytes() <= 8 {
+            let _read_value =
+                self.atomic_load_impl(machine, address, size, MemoryOrdering::NotAtomic)?;
+            return interp_ok(Scalar::from_u64(0xDEADBEEF));
+        }
+        let alignment = address.bytes() % 8;
+        if alignment != 0 {
+            todo!(
+                "Memory accesses not aligned to at least 8 bytes not yet supported (addr: {address:?}, size: {size:?})"
+            );
+        }
+        let start_address = address.bytes();
+        let end_address = address.bytes() + size.bytes(); // +7 to not miss any bytes (but potentially write too many (GenMC might not like that))
+        let rem = size.bytes() % 8;
+        info!(
+            "GenMC: splitting memory_load into 8 byte chunks in range: {start_address:#x} to {end_address:#x}, size: {}, rem bytes: {rem}",
+            size.bytes()
+        );
+        for chunk_address in (start_address..end_address).step_by(8) {
+            let chunk_addr = Size::from_bytes(chunk_address);
+            let chunk_size = Size::from_bytes(8);
+            let _read_value =
+                self.atomic_load_impl(machine, chunk_addr, chunk_size, MemoryOrdering::NotAtomic)?;
+        }
+        // TODO GENMC (HACK): just assume the rest are 1 byte accesses:
+        for offset in 0..rem {
+            let chunk_addr = Size::from_bytes(end_address - rem + offset);
+            let chunk_size = Size::from_bytes(1);
+            let _read_value =
+                self.atomic_load_impl(machine, chunk_addr, chunk_size, MemoryOrdering::NotAtomic)?;
+        }
         interp_ok(Scalar::from_u64(0xDEADBEEF))
     }
 
@@ -673,8 +706,55 @@ impl GenmcCtx {
         if size.bytes() == 0 {
             return interp_ok(());
         }
+
         let dummy_scalar = GenmcScalar::DUMMY;
-        self.atomic_store_impl(machine, address, size, dummy_scalar, MemoryOrdering::NotAtomic)
+        if size.bytes() <= 8 {
+            return self.atomic_store_impl(
+                machine,
+                address,
+                size,
+                dummy_scalar,
+                MemoryOrdering::NotAtomic,
+            );
+        }
+        let alignment = address.bytes() % 8;
+        if alignment != 0 {
+            todo!(
+                "Memory accesses not aligned to at least 8 bytes not yet supported (addr: {address:?}, size: {size:?})"
+            );
+        }
+        let start_address = address.bytes();
+        let end_address = address.bytes() + size.bytes();
+        let rem = size.bytes() % 8;
+        info!(
+            "GenMC: splitting memory_store into 8 byte chunks in range: {start_address:#x} to {end_address:#x}, size: {}, rem bytes: {rem}",
+            size.bytes()
+        );
+        // NOTE: This will skip up to 7 bytes at the end
+        for chunk_address in (start_address..end_address).step_by(8) {
+            let chunk_addr = Size::from_bytes(chunk_address);
+            let chunk_size = Size::from_bytes(8);
+            self.atomic_store_impl(
+                machine,
+                chunk_addr,
+                chunk_size,
+                dummy_scalar,
+                MemoryOrdering::NotAtomic,
+            )?;
+        }
+        // TODO GENMC (HACK): just assume the rest are 1 byte accesses:
+        for offset in 0..rem {
+            let chunk_addr = Size::from_bytes(end_address - rem + offset);
+            let chunk_size = Size::from_bytes(8);
+            self.atomic_store_impl(
+                machine,
+                chunk_addr,
+                chunk_size,
+                dummy_scalar,
+                MemoryOrdering::NotAtomic,
+            )?;
+        }
+        interp_ok(())
     }
 
     /**** Memory (de)allocation ****/
