@@ -1,67 +1,67 @@
-use super::ffi::{MemoryOrdering, RmwBinOp};
+use super::ffi::{MemOrdering, RMWBinOp};
 use crate::intrinsics::AtomicOp;
 use crate::{AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd};
 
 impl AtomicReadOrd {
-    pub(super) fn convert(self) -> MemoryOrdering {
+    pub(super) fn convert(self) -> MemOrdering {
         match self {
-            AtomicReadOrd::Relaxed => MemoryOrdering::Relaxed,
-            AtomicReadOrd::Acquire => MemoryOrdering::Acquire,
-            AtomicReadOrd::SeqCst => MemoryOrdering::SequentiallyConsistent,
+            AtomicReadOrd::Relaxed => MemOrdering::Relaxed,
+            AtomicReadOrd::Acquire => MemOrdering::Acquire,
+            AtomicReadOrd::SeqCst => MemOrdering::SequentiallyConsistent,
         }
     }
 }
 
 impl AtomicWriteOrd {
-    pub(super) fn convert(self) -> MemoryOrdering {
+    pub(super) fn convert(self) -> MemOrdering {
         match self {
-            AtomicWriteOrd::Relaxed => MemoryOrdering::Relaxed,
-            AtomicWriteOrd::Release => MemoryOrdering::Release,
-            AtomicWriteOrd::SeqCst => MemoryOrdering::SequentiallyConsistent,
+            AtomicWriteOrd::Relaxed => MemOrdering::Relaxed,
+            AtomicWriteOrd::Release => MemOrdering::Release,
+            AtomicWriteOrd::SeqCst => MemOrdering::SequentiallyConsistent,
         }
     }
 }
 
 impl AtomicFenceOrd {
-    pub(super) fn convert(self) -> MemoryOrdering {
+    pub(super) fn convert(self) -> MemOrdering {
         match self {
-            AtomicFenceOrd::Acquire => MemoryOrdering::Acquire,
-            AtomicFenceOrd::Release => MemoryOrdering::Release,
-            AtomicFenceOrd::AcqRel => MemoryOrdering::AcquireRelease,
-            AtomicFenceOrd::SeqCst => MemoryOrdering::SequentiallyConsistent,
+            AtomicFenceOrd::Acquire => MemOrdering::Acquire,
+            AtomicFenceOrd::Release => MemOrdering::Release,
+            AtomicFenceOrd::AcqRel => MemOrdering::AcquireRelease,
+            AtomicFenceOrd::SeqCst => MemOrdering::SequentiallyConsistent,
         }
     }
 }
 
 impl AtomicRwOrd {
-    pub(super) fn to_genmc_memory_orderings(self) -> (MemoryOrdering, MemoryOrdering) {
+    pub(super) fn to_genmc_memory_orderings(self) -> (MemOrdering, MemOrdering) {
         match self {
             // TODO GENMC: check if we need to implement Release ==> (Release, Release)
-            AtomicRwOrd::Relaxed => (MemoryOrdering::Relaxed, MemoryOrdering::Relaxed),
-            AtomicRwOrd::Acquire => (MemoryOrdering::Acquire, MemoryOrdering::Relaxed),
-            AtomicRwOrd::Release => (MemoryOrdering::Relaxed, MemoryOrdering::Release),
-            AtomicRwOrd::AcqRel => (MemoryOrdering::Acquire, MemoryOrdering::Release),
+            AtomicRwOrd::Relaxed => (MemOrdering::Relaxed, MemOrdering::Relaxed),
+            AtomicRwOrd::Acquire => (MemOrdering::Acquire, MemOrdering::Relaxed),
+            AtomicRwOrd::Release => (MemOrdering::Relaxed, MemOrdering::Release),
+            AtomicRwOrd::AcqRel => (MemOrdering::Acquire, MemOrdering::Release),
             AtomicRwOrd::SeqCst =>
-                (MemoryOrdering::SequentiallyConsistent, MemoryOrdering::SequentiallyConsistent),
+                (MemOrdering::SequentiallyConsistent, MemOrdering::SequentiallyConsistent),
         }
     }
 }
 
 impl AtomicOp {
-    pub(super) fn to_genmc_rmw_op(&self, is_unsigned: bool) -> RmwBinOp {
+    pub(super) fn to_genmc_rmw_op(&self, is_unsigned: bool) -> RMWBinOp {
         match (self, is_unsigned) {
-            (AtomicOp::Min, false) => RmwBinOp::Min, // TODO GENMC: is there a use for FMin? (Min, UMin, FMin)
-            (AtomicOp::Max, false) => RmwBinOp::Max,
-            (AtomicOp::Min, true) => RmwBinOp::UMin,
-            (AtomicOp::Max, true) => RmwBinOp::UMax,
+            (AtomicOp::Min, false) => RMWBinOp::Min, // TODO GENMC: is there a use for FMin? (Min, UMin, FMin)
+            (AtomicOp::Max, false) => RMWBinOp::Max,
+            (AtomicOp::Min, true) => RMWBinOp::UMin,
+            (AtomicOp::Max, true) => RMWBinOp::UMax,
             (&AtomicOp::MirOp(bin_op, negate), _) =>
                 match bin_op {
-                    rustc_middle::mir::BinOp::Add => RmwBinOp::Add,
-                    rustc_middle::mir::BinOp::Sub => RmwBinOp::Sub,
-                    rustc_middle::mir::BinOp::BitOr if !negate => RmwBinOp::Or,
-                    rustc_middle::mir::BinOp::BitXor if !negate => RmwBinOp::Xor,
-                    rustc_middle::mir::BinOp::BitAnd if negate => RmwBinOp::Nand,
-                    rustc_middle::mir::BinOp::BitAnd => RmwBinOp::And,
+                    rustc_middle::mir::BinOp::Add => RMWBinOp::Add,
+                    rustc_middle::mir::BinOp::Sub => RMWBinOp::Sub,
+                    rustc_middle::mir::BinOp::BitOr if !negate => RMWBinOp::Or,
+                    rustc_middle::mir::BinOp::BitXor if !negate => RMWBinOp::Xor,
+                    rustc_middle::mir::BinOp::BitAnd if negate => RMWBinOp::Nand,
+                    rustc_middle::mir::BinOp::BitAnd => RMWBinOp::And,
                     _ => {
                         panic!(
                             "unsupported atomic operation: bin_op: {bin_op:?}, negate: {negate}"
