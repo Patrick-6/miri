@@ -275,6 +275,8 @@ mod ffi {
         fn handleUserBlock(self: Pin<&mut MiriGenMCShim>, thread_id: i32);
 
         fn scheduleNext(self: Pin<&mut MiriGenMCShim>, thread_states: &[ThreadStateInfo]) -> i64;
+        fn setTerminatorEnd(self: Pin<&mut MiriGenMCShim>, thread_id: i32);
+
         fn isHalting(self: &MiriGenMCShim) -> bool;
         fn isMoot(self: &MiriGenMCShim) -> bool;
         fn isExplorationDone(self: Pin<&mut MiriGenMCShim>) -> bool;
@@ -311,6 +313,8 @@ pub struct GenmcCtx {
 
     // TODO GENMC (HACK): we make one large allocation to then use for ZSTs, to reduce the number of events we create for GenMC
     zst_allocation_range: Cell<(usize, usize, usize)>,
+
+    is_handling_terminator: Cell<bool>,
 }
 
 /// Convert an address selected by GenMC into Miri's type for addresses.
@@ -352,6 +356,7 @@ impl GenmcCtx {
         let stuck_execution_count = Cell::new(0);
         let curr_thread_user_block = Cell::new(false);
         let zst_allocation_range = Cell::new((0, 0, 0));
+        let is_handling_terminator = Cell::new(false);
 
         Self {
             handle: non_null_handle,
@@ -361,6 +366,7 @@ impl GenmcCtx {
             stuck_execution_count,
             curr_thread_user_block,
             zst_allocation_range,
+            is_handling_terminator,
         }
     }
 
@@ -471,6 +477,7 @@ impl GenmcCtx {
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let ordering = ordering.convert();
         let read_value = self.atomic_load_impl(&ecx.machine, address, size, ordering)?;
+        info!("GenMC: atomic_load: received value from GenMC: {read_value:?}");
         genmc_scalar_to_scalar(ecx, read_value, size)
     }
 
@@ -676,6 +683,7 @@ impl GenmcCtx {
         for chunk_address in (start_address..end_address).step_by(8) {
             let chunk_addr = Size::from_bytes(chunk_address);
             let chunk_size = Size::from_bytes(8);
+            info!("GenMC:   loading chunk @ {chunk_address:#x}");
             let _read_value =
                 self.atomic_load_impl(machine, chunk_addr, chunk_size, MemoryOrdering::NotAtomic)?;
         }
@@ -734,6 +742,7 @@ impl GenmcCtx {
         for chunk_address in (start_address..end_address).step_by(8) {
             let chunk_addr = Size::from_bytes(chunk_address);
             let chunk_size = Size::from_bytes(8);
+            info!("GenMC:   writing chunk @ {chunk_address:#x}");
             self.atomic_store_impl(
                 machine,
                 chunk_addr,
@@ -972,25 +981,36 @@ impl GenmcCtx {
         ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
     ) -> InterpResult<'tcx, ThreadId> {
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
-
         let active_thread_id = thread_manager.active_thread();
+        let (genmc_tid, thread_user_code_finished) = {
+            let thread_infos = self.thread_infos.borrow();
+            let thread_info = thread_infos.get_info(active_thread_id);
+            // TODO GENMC: maybe just make `ThreadInfo` copy?
+            (thread_info.genmc_tid, thread_info.user_code_finished)
+        };
+        let next_instr_info = get_next_instr_info(ecx, thread_manager, active_thread_id);
+        let is_next_instr_terminator = matches!(
+            next_instr_info,
+            NextInstrInfo::NonAtomicTerminator | NextInstrInfo::MaybeAtomicTerminator
+        );
+
+        // TODO GENMC (HACK): workaround for GenMC scheduler not handling multiple events per terminator:
+        if self.is_handling_terminator.replace(is_next_instr_terminator) {
+            let mut mc = self.handle.borrow_mut();
+            let pinned_mc = mc.as_mut();
+            pinned_mc.setTerminatorEnd(genmc_tid.0);
+        }
+
         // We need to ask GenMC for a scheduling decision if:
         // - We are about to execute a MIR Terminator
         // - The current thread has no more user code to execute (the main thread yields a few times in that case)
         // - The current thread is blocked
         // - We just executed a GenMC `UserBlock` (this is not covered by the previous case, since Miri doesn't see `UserBlock`s)
         let curr_thread_user_block = self.curr_thread_user_block.replace(false);
-        let thread_user_code_finished = {
-            let thread_infos = self.thread_infos.borrow();
-            thread_infos.get_info(active_thread_id).user_code_finished
-        };
         if !curr_thread_user_block
             && !thread_user_code_finished
             && thread_manager.threads_ref()[active_thread_id].get_state().is_enabled()
-            && matches!(
-                get_next_instr_info(ecx, thread_manager, active_thread_id),
-                NextInstrInfo::None | NextInstrInfo::Statement
-            )
+            && !is_next_instr_terminator
         {
             info!("GenMC: schedule_thread called, but no scheduling decision required...");
             // TODO GENMC: skip the checks in the calling function in this case:
@@ -1095,6 +1115,11 @@ impl GenmcCtx {
         size: Size,
         memory_ordering: MemoryOrdering,
     ) -> InterpResult<'tcx, GenmcScalar> {
+        assert!(
+            size.bytes() <= 8,
+            "TODO GENMC: no support for accesses larger than 8 bytes (got {} bytes)",
+            size.bytes()
+        );
         if IGNORE_NON_ATOMICS && memory_ordering == MemoryOrdering::NotAtomic {
             info!("GenMC: TODO GENMC: skipping non-atomic load!");
             return interp_ok(GenmcScalar::DUMMY);
@@ -1137,6 +1162,11 @@ impl GenmcCtx {
         genmc_value: GenmcScalar,
         memory_ordering: MemoryOrdering,
     ) -> InterpResult<'tcx, ()> {
+        assert!(
+            size.bytes() <= 8,
+            "TODO GENMC: no support for accesses larger than 8 bytes (got {} bytes)",
+            size.bytes()
+        );
         if IGNORE_NON_ATOMICS && memory_ordering == MemoryOrdering::NotAtomic {
             info!("GenMC: TODO GENMC: skipping non-atomic store!");
             return interp_ok(());
@@ -1184,6 +1214,11 @@ impl GenmcCtx {
         genmc_rmw_op: RmwBinOp,
         genmc_rhs_scalar: GenmcScalar,
     ) -> InterpResult<'tcx, (Scalar, bool)> {
+        assert!(
+            size.bytes() <= 8,
+            "TODO GENMC: no support for accesses larger than 8 bytes (got {} bytes)",
+            size.bytes()
+        );
         let machine = &ecx.machine;
         assert_ne!(0, size.bytes());
         let thread_infos = self.thread_infos.borrow();
