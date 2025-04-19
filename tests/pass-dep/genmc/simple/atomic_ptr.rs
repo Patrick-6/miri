@@ -39,6 +39,11 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
         if y_ptr_ != y_ptr {
             std::process::abort();
         }
+        // To make sure also the provenance info is correctly restored, we need to use the pointers:
+        if *y_ptr_ != *y_ptr {
+            std::process::abort();
+        }
+        *y_ptr_ = *y_ptr;
 
         match atomic_ptr.compare_exchange(
             y_ptr, // wrong, it should be `x_ptr`, so this should never succeed
@@ -50,6 +55,10 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
             Err(ptr) =>
                 if ptr != x_ptr {
                     std::process::abort();
+                } else if *ptr != *x_ptr {
+                    std::process::abort();
+                } else {
+                    *ptr = *ptr;
                 },
         }
 
@@ -70,6 +79,10 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
         *ptr = 0xB;
         // TODO GENMC: maybe test fetch_ptr_add here too?
         if array[2] != 0xB {
+            std::process::abort();
+        }
+        array[2] = 0xC;
+        if *ptr != 0xC {
             std::process::abort();
         }
     }
