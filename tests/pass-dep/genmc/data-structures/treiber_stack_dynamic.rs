@@ -4,6 +4,7 @@
 
 #![no_main]
 #![allow(static_mut_refs)]
+#![allow(unused)]
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
@@ -26,8 +27,7 @@ static mut STACK: MyStack = MyStack::new();
 static mut THREADS: [pthread_t; MAX_THREADS] = [0; MAX_THREADS];
 static mut PARAMS: [u64; MAX_THREADS] = [POISON_IDX; MAX_THREADS];
 
-// NOTE: this is ok since AtomicU64 has the same size and alignment as u64:
-static mut X: [AtomicU64; MAX_THREADS] = unsafe { std::mem::transmute([POISON_IDX; MAX_THREADS]) };
+// static mut X: [AtomicU64; MAX_THREADS] = [const { AtomicU64::new(POISON_IDX) }; MAX_THREADS];
 
 unsafe fn set_thread_num(_i: u64) {
     // TID = i;
@@ -47,16 +47,9 @@ struct Node {
 
 struct MyStack {
     top: AtomicPtr<Node>,
-    #[allow(unused)] // TODO GENMC: what is the purpose of this in the GenMC version?
-    nodes: [Node; MAX_NODES],
 }
 
 impl Node {
-    #[allow(unused)]
-    pub const fn new() -> Self {
-        Self { value: POISON_IDX, next: AtomicPtr::new(std::ptr::null_mut()) }
-    }
-
     pub unsafe fn new_alloc() -> *mut Self {
         Box::into_raw(Box::<Self>::new_uninit()) as *mut Self
     }
@@ -72,10 +65,7 @@ impl Node {
 
 impl MyStack {
     pub const fn new() -> Self {
-        Self {
-            top: AtomicPtr::new(std::ptr::null_mut()),
-            nodes: unsafe { std::mem::transmute([(0u64, 0usize); MAX_NODES]) },
-        }
+        Self { top: AtomicPtr::new(std::ptr::null_mut()) }
     }
 
     pub unsafe fn init_stack(&mut self, _num_threads: usize) {
@@ -99,7 +89,7 @@ impl MyStack {
     pub unsafe fn push(&self, value: u64) {
         let node = Node::new_alloc();
         (*node).value = value;
-        (*node).next = AtomicPtr::new(std::ptr::null_mut());
+        // (*node).next = AtomicPtr::new(std::ptr::null_mut());
 
         loop {
             let top = self.top.load(Ordering::Acquire);
@@ -143,7 +133,7 @@ extern "C" fn thread_w(value: *mut c_void) -> *mut c_void {
         let pid = *(value as *mut u64);
         set_thread_num(pid);
 
-        X[pid as usize].store(pid + 42, Ordering::Relaxed);
+        // X[pid as usize].store(pid + 42, Ordering::Relaxed);
         STACK.push(pid);
 
         std::ptr::null_mut()
@@ -157,7 +147,8 @@ extern "C" fn thread_r(value: *mut c_void) -> *mut c_void {
 
         let idx = STACK.pop();
         if idx != 0 {
-            let _b = X[idx as usize].load(Ordering::Relaxed);
+            // TODO GENMC: can remove X
+            // let _b = X[idx as usize].load(Ordering::Relaxed);
             // println!("b: {_b}");
         }
 
@@ -170,12 +161,12 @@ extern "C" fn thread_rw(value: *mut c_void) -> *mut c_void {
         let pid = *(value as *mut u64);
         set_thread_num(pid);
 
-        X[pid as usize].store(pid + 42, Ordering::Relaxed);
+        // X[pid as usize].store(pid + 42, Ordering::Relaxed);
         STACK.push(pid);
 
         let idx = STACK.pop();
         if idx != 0 {
-            let _b = X[idx as usize].load(Ordering::Relaxed);
+            // let _b = X[idx as usize].load(Ordering::Relaxed);
             // println!("b: {_b}");
         }
 
@@ -195,13 +186,14 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
     let num_threads = readers + writers + rdwr;
 
     if readers > MAX_READERS || writers > MAX_WRITERS || rdwr > MAX_RDWR {
-        std::process::abort();
+        // std::process::abort();
     }
 
     let mut i = 0;
     unsafe {
-        X[1].store(0, Ordering::Relaxed); // TODO GENMC (HACK): make non-atomic once GenMC supports mixed atomics/non-atomics
-        X[2].store(0, Ordering::Relaxed); // TODO GENMC (HACK): make non-atomic once GenMC supports mixed atomics/non-atomics
+        // TODO REMOVE
+        // X[1].store(0, Ordering::Relaxed); // TODO GENMC (HACK): make non-atomic once GenMC supports mixed atomics/non-atomics
+        // X[2].store(0, Ordering::Relaxed); // TODO GENMC (HACK): make non-atomic once GenMC supports mixed atomics/non-atomics
 
         MyStack::init_stack(&mut STACK, num_threads);
 
@@ -240,7 +232,7 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
             }
         }
 
-        MyStack::clear_stack(&mut STACK, num_threads);
+        // MyStack::clear_stack(&mut STACK, num_threads);
     }
 
     0
