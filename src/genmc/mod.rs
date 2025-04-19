@@ -13,7 +13,7 @@ use tracing::{info, warn};
 
 use self::cxx_extra::NonNullUniquePtr;
 use self::ffi::{
-    GenmcScalar, MemoryOrdering, MiriGenMCShim, RmwBinOp, StoreEventType, ThreadState,
+    GenmcScalar, MemOrdering, MiriGenMCShim, RMWBinOp, StoreEventType, ThreadState,
     ThreadStateInfo, createGenmcHandle,
 };
 use self::helper::{
@@ -63,29 +63,29 @@ mod ffi {
     }
 
     #[derive(Debug)]
-    enum MemoryOrdering {
+    enum MemOrdering {
         NotAtomic = 0,
-        Unordered = 1,
-        Relaxed = 2,
-        Acquire = 4,
-        Release = 5,
-        AcquireRelease = 6,
-        SequentiallyConsistent = 7,
+        Relaxed = 1,
+        // In case we support consume
+        Acquire = 3,
+        Release = 4,
+        AcquireRelease = 5,
+        SequentiallyConsistent = 6,
     }
 
     #[derive(Debug)]
-    enum RmwBinOp {
-        Xchg,
-        Min,
-        Max,
-        UMin,
-        UMax,
-        Add,
-        Sub,
-        And,
-        Nand,
-        Or,
-        Xor,
+    enum RMWBinOp {
+        Xchg = 0,
+        Add = 1,
+        Sub = 2,
+        And = 3,
+        Nand = 4,
+        Or = 5,
+        Xor = 6,
+        Max = 7,
+        Min = 8,
+        UMax = 9,
+        UMin = 10,
     }
 
     #[derive(Debug)]
@@ -186,8 +186,8 @@ mod ffi {
     unsafe extern "C++" {
         include!("miri/genmc/src/Verification/MiriInterface.hpp");
 
-        type MemoryOrdering;
-        type RmwBinOp;
+        type MemOrdering;
+        type RMWBinOp;
         type StoreEventType;
 
         // Types for Scheduling queries:
@@ -220,16 +220,16 @@ mod ffi {
             thread_id: i32,
             address: usize,
             size: usize,
-            memory_ordering: MemoryOrdering,
+            memory_ordering: MemOrdering,
         ) -> LoadResult; // TODO GENMC: modify this to allow for handling pointers and u128
         fn handleReadModifyWrite(
             self: Pin<&mut MiriGenMCShim>,
             thread_id: i32,
             address: usize,
             size: usize,
-            load_ordering: MemoryOrdering,
-            store_ordering: MemoryOrdering,
-            rmw_op: RmwBinOp,
+            load_ordering: MemOrdering,
+            store_ordering: MemOrdering,
+            rmw_op: RMWBinOp,
             rhs_value: GenmcScalar,
         ) -> ReadModifyWriteResult; // TODO GENMC: modify this to allow for handling pointers and u128
         fn handleCompareExchange(
@@ -239,9 +239,9 @@ mod ffi {
             size: usize,
             expected_value: GenmcScalar,
             new_value: GenmcScalar,
-            success_load_ordering: MemoryOrdering,
-            success_store_ordering: MemoryOrdering,
-            fail_load_ordering: MemoryOrdering,
+            success_load_ordering: MemOrdering,
+            success_store_ordering: MemOrdering,
+            fail_load_ordering: MemOrdering,
             can_fail_spuriously: bool,
         ) -> ReadModifyWriteResult;
         fn handleStore(
@@ -250,13 +250,13 @@ mod ffi {
             address: usize,
             size: usize,
             value: GenmcScalar,
-            memory_ordering: MemoryOrdering,
+            memory_ordering: MemOrdering,
             store_event_type: StoreEventType,
         ) -> StoreResult;
         fn handleFence(
             self: Pin<&mut MiriGenMCShim>,
             thread_id: i32,
-            memory_ordering: MemoryOrdering,
+            memory_ordering: MemOrdering,
         );
 
         fn handleMalloc(
@@ -557,7 +557,7 @@ impl GenmcCtx {
         // TODO GENMC: could maybe merge this with atomic_rmw?
 
         let (load_ordering, store_ordering) = ordering.to_genmc_memory_orderings();
-        let genmc_rmw_op = RmwBinOp::Xchg;
+        let genmc_rmw_op = RMWBinOp::Xchg;
         tracing::info!(
             "GenMC: atomic_exchange (op: {genmc_rmw_op:?}): new value: {rhs_scalar:?}, orderings ({load_ordering:?}, {store_ordering:?})"
         );
@@ -657,14 +657,14 @@ impl GenmcCtx {
             return interp_ok(Scalar::from_bool(false)); // TODO GENMC: what should be returned here?
         }
         // let _read_value =
-        //     self.atomic_load_impl(machine, address, size, MemoryOrdering::NotAtomic)?;
+        //     self.atomic_load_impl(machine, address, size, MemOrdering::NotAtomic)?;
 
         // // TODO GENMC (HACK): to handle large non-atomics, we ignore the value by GenMC for now
         // interp_ok(Scalar::from_u64(0xDEADBEEF))
 
         if size.bytes() <= 8 {
             let _read_value =
-                self.atomic_load_impl(machine, address, size, MemoryOrdering::NotAtomic)?;
+                self.atomic_load_impl(machine, address, size, MemOrdering::NotAtomic)?;
             return interp_ok(Scalar::from_u64(0xDEADBEEF));
         }
         let alignment = address.bytes() % 8;
@@ -685,14 +685,14 @@ impl GenmcCtx {
             let chunk_size = Size::from_bytes(8);
             info!("GenMC:   loading chunk @ {chunk_address:#x}");
             let _read_value =
-                self.atomic_load_impl(machine, chunk_addr, chunk_size, MemoryOrdering::NotAtomic)?;
+                self.atomic_load_impl(machine, chunk_addr, chunk_size, MemOrdering::NotAtomic)?;
         }
         // TODO GENMC (HACK): just assume the rest are 1 byte accesses:
         for offset in 0..rem {
             let chunk_addr = Size::from_bytes(end_address - rem + offset);
             let chunk_size = Size::from_bytes(1);
             let _read_value =
-                self.atomic_load_impl(machine, chunk_addr, chunk_size, MemoryOrdering::NotAtomic)?;
+                self.atomic_load_impl(machine, chunk_addr, chunk_size, MemOrdering::NotAtomic)?;
         }
         interp_ok(Scalar::from_u64(0xDEADBEEF))
     }
@@ -722,7 +722,7 @@ impl GenmcCtx {
                 address,
                 size,
                 dummy_scalar,
-                MemoryOrdering::NotAtomic,
+                MemOrdering::NotAtomic,
             );
         }
         let alignment = address.bytes() % 8;
@@ -748,7 +748,7 @@ impl GenmcCtx {
                 chunk_addr,
                 chunk_size,
                 dummy_scalar,
-                MemoryOrdering::NotAtomic,
+                MemOrdering::NotAtomic,
             )?;
         }
         // TODO GENMC (HACK): just assume the rest are 1 byte accesses:
@@ -760,7 +760,7 @@ impl GenmcCtx {
                 chunk_addr,
                 chunk_size,
                 dummy_scalar,
-                MemoryOrdering::NotAtomic,
+                MemOrdering::NotAtomic,
             )?;
         }
         interp_ok(())
@@ -846,7 +846,7 @@ impl GenmcCtx {
 
         // let dummy_scalar = Scalar::from_u64(0xDEADBEEF);
         // // TODO GENMC: proper error handling:
-        // self.atomic_store_impl(machine, address, size, dummy_scalar, MemoryOrdering::NotAtomic)
+        // self.atomic_store_impl(machine, address, size, dummy_scalar, MemOrdering::NotAtomic)
         //     .unwrap();
     }
 
@@ -1113,14 +1113,14 @@ impl GenmcCtx {
         machine: &MiriMachine<'tcx>,
         address: Size,
         size: Size,
-        memory_ordering: MemoryOrdering,
+        memory_ordering: MemOrdering,
     ) -> InterpResult<'tcx, GenmcScalar> {
         assert!(
             size.bytes() <= 8,
             "TODO GENMC: no support for accesses larger than 8 bytes (got {} bytes)",
             size.bytes()
         );
-        if IGNORE_NON_ATOMICS && memory_ordering == MemoryOrdering::NotAtomic {
+        if IGNORE_NON_ATOMICS && memory_ordering == MemOrdering::NotAtomic {
             info!("GenMC: TODO GENMC: skipping non-atomic load!");
             return interp_ok(GenmcScalar::DUMMY);
         }
@@ -1160,14 +1160,14 @@ impl GenmcCtx {
         address: Size,
         size: Size,
         genmc_value: GenmcScalar,
-        memory_ordering: MemoryOrdering,
+        memory_ordering: MemOrdering,
     ) -> InterpResult<'tcx, ()> {
         assert!(
             size.bytes() <= 8,
             "TODO GENMC: no support for accesses larger than 8 bytes (got {} bytes)",
             size.bytes()
         );
-        if IGNORE_NON_ATOMICS && memory_ordering == MemoryOrdering::NotAtomic {
+        if IGNORE_NON_ATOMICS && memory_ordering == MemOrdering::NotAtomic {
             info!("GenMC: TODO GENMC: skipping non-atomic store!");
             return interp_ok(());
         }
@@ -1209,9 +1209,9 @@ impl GenmcCtx {
         ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
         address: Size,
         size: Size,
-        load_ordering: MemoryOrdering,
-        store_ordering: MemoryOrdering,
-        genmc_rmw_op: RmwBinOp,
+        load_ordering: MemOrdering,
+        store_ordering: MemOrdering,
+        genmc_rmw_op: RMWBinOp,
         genmc_rhs_scalar: GenmcScalar,
     ) -> InterpResult<'tcx, (Scalar, bool)> {
         assert!(
