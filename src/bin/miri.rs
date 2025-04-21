@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, Once};
 
 use miri::{
-    BacktraceStyle, BorrowTrackerMethod, GenmcCtx, GenmcPrintGraphSetting, MiriConfig,
+    BacktraceStyle, BorrowTrackerMethod, GenmcConfig, GenmcCtx, GenmcPrintGraphSetting, MiriConfig,
     MiriEntryFnType, ProvenanceMode, RetagFields, ValidationMode,
 };
 use rustc_abi::ExternAbi;
@@ -232,17 +232,13 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
 
             for rep in 0..max_reps {
                 tracing::info!("MIRI: running GenMC loop {}/{max_reps}", rep + 1);
-                let return_code = miri::eval_entry(
+                let result = miri::eval_entry(
                     tcx,
                     entry_def_id,
                     entry_type,
                     &config,
                     Some(genmc_ctx.clone()),
-                )
-                .unwrap_or_else(|| {
-                    tcx.dcx().abort_if_errors();
-                    rustc_driver::EXIT_FAILURE
-                });
+                );
 
                 // TODO GENMC: is this the correct place to put this?
 
@@ -252,12 +248,13 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
                     _ => {}
                 }
 
-                let is_exploration_done = genmc_ctx.is_exploration_done();
+                // TODO GENMC (ERROR REPORTING): we currently do this here, so we can still print the GenMC graph above
+                let return_code = result.unwrap_or_else(|| {
+                    tcx.dcx().abort_if_errors();
+                    rustc_driver::EXIT_FAILURE
+                });
 
-                // // TODO GENMC (DEBUG):
-                // eprintln!("=============================> TODO GENMC DEBUG PRINTING GRAPH AFTER IT IS CHANGED! <=============================");
-                // genmc_ctx.print_genmc_graph();
-                // eprintln!("=============================> TODO GENMC DEBUG PRINTING GRAPH AFTER IT IS CHANGED! <=============================");
+                let is_exploration_done = genmc_ctx.is_exploration_done();
 
                 tracing::info!(
                     "(GenMC Mode) Execution done (return code: {return_code}), is_exploration_done: {is_exploration_done}",
@@ -677,38 +674,8 @@ fn main() {
             many_seeds = Some(0..64);
         } else if arg == "-Zmiri-many-seeds-keep-going" {
             many_seeds_keep_going = true;
-        } else if arg == "-Zmiri-genmc" {
-            // TODO GENMC: add to documentation
-            // TODO GENMC: add more GenMC options
-            miri_config.genmc_config = Some(Default::default());
-            // GenMC handles data race detection and weak memory emulation, so we disable the Miri equivalents:
-            // TODO GENMC: make sure this isn't reactivated by other flags
-            miri_config.data_race_detector = false;
-            miri_config.weak_memory_emulation = false;
-
-            // FIXME: Currently GenMC mode incompatible with aliasing model checking
-            miri_config.borrow_tracker = None;
-        } else if arg == "-Zmiri-genmc-log-trace" {
-            if let Some(genmc_config) = &mut miri_config.genmc_config {
-                // TODO GENMC: maybe expand to allow more control over log level?
-                genmc_config.set_log_level_trace();
-            } else {
-                todo!("TODO GENMC: Handle GenMC arguments in wrong order");
-            }
-        } else if let Some(param) = arg.strip_prefix("-Zmiri-genmc-print-graph") {
-            // TODO GENMC (DOCUMENTATION)
-            if let Some(genmc_config) = &mut miri_config.genmc_config {
-                genmc_config.set_graph_printing(param);
-            } else {
-                todo!("TODO GENMC: Handle GenMC arguments in wrong order");
-            }
-        } else if arg == "-Zmiri-genmc-disable-race-detection" {
-            // TODO GENMC (DOCUMENTATION)
-            if let Some(genmc_config) = &mut miri_config.genmc_config {
-                genmc_config.params.disable_race_detection = true;
-            } else {
-                todo!("Handle GenMC arguments in wrong order");
-            }
+        } else if let Some(trimmed_arg) = arg.strip_prefix("-Zmiri-genmc") {
+            GenmcConfig::parse_arg(&mut miri_config, trimmed_arg);
         } else if let Some(param) = arg.strip_prefix("-Zmiri-env-forward=") {
             miri_config.forwarded_env_vars.push(param.to_owned());
         } else if let Some(param) = arg.strip_prefix("-Zmiri-env-set=") {

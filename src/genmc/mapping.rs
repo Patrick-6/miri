@@ -38,9 +38,12 @@ impl AtomicRwOrd {
         match self {
             // TODO GENMC: check if we need to implement Release ==> (Release, Release)
             AtomicRwOrd::Relaxed => (MemOrdering::Relaxed, MemOrdering::Relaxed),
-            AtomicRwOrd::Acquire => (MemOrdering::Acquire, MemOrdering::Relaxed),
-            AtomicRwOrd::Release => (MemOrdering::Relaxed, MemOrdering::Release),
-            AtomicRwOrd::AcqRel => (MemOrdering::Acquire, MemOrdering::Release),
+            AtomicRwOrd::Acquire => (MemOrdering::Acquire, MemOrdering::Acquire),
+            AtomicRwOrd::Release => (MemOrdering::Release, MemOrdering::Release),
+            AtomicRwOrd::AcqRel => (MemOrdering::AcquireRelease, MemOrdering::AcquireRelease),
+            // AtomicRwOrd::Acquire => (MemOrdering::Acquire, MemOrdering::Relaxed),
+            // AtomicRwOrd::Release => (MemOrdering::Relaxed, MemOrdering::Release),
+            // AtomicRwOrd::AcqRel => (MemOrdering::Acquire, MemOrdering::Release),
             AtomicRwOrd::SeqCst =>
                 (MemOrdering::SequentiallyConsistent, MemOrdering::SequentiallyConsistent),
         }

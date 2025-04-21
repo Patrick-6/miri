@@ -60,6 +60,7 @@ mod ffi {
         pub disable_race_detection: bool,
         pub quiet: bool, // TODO GENMC: maybe make log-level more fine grained
         pub log_level_trace: bool,
+        pub do_symmetry_reduction: bool,
     }
 
     #[derive(Debug)]
@@ -253,11 +254,7 @@ mod ffi {
             memory_ordering: MemOrdering,
             store_event_type: StoreEventType,
         ) -> StoreResult;
-        fn handleFence(
-            self: Pin<&mut MiriGenMCShim>,
-            thread_id: i32,
-            memory_ordering: MemOrdering,
-        );
+        fn handleFence(self: Pin<&mut MiriGenMCShim>, thread_id: i32, memory_ordering: MemOrdering);
 
         fn handleMalloc(
             self: Pin<&mut MiriGenMCShim>,
@@ -799,7 +796,8 @@ impl GenmcCtx {
         // GenMC doesn't support ZSTs, so we set the minimum size to 1 byte
         let genmc_size = size_to_genmc(size).max(1);
         info!(
-            "GenMC: handle_alloc (thread: {curr_thread:?} ({genmc_tid:?}), size: {size:?} (genmc size: {genmc_size} bytes), alignment: {alignment:?}, memory_kind: {memory_kind:?})"
+            "GenMC: handle_alloc (thread: {curr_thread:?} ({genmc_tid:?}), size: {} (genmc size: {genmc_size} bytes), alignment: {alignment:?}, memory_kind: {memory_kind:?})",
+            size.bytes()
         );
         if memory_kind == MemoryKind::Machine(crate::MiriMemoryKind::Global) {
             info!("GenMC: handle_alloc: TODO GENMC: maybe handle initialization of globals here?");
@@ -872,7 +870,8 @@ impl GenmcCtx {
         let curr_thread = machine.threads.active_thread();
         let genmc_tid = thread_infos.get_info(curr_thread).genmc_tid;
         info!(
-            "GenMC: memory deallocation, thread: {curr_thread:?} ({genmc_tid:?}), address: {address:?}, size: {size:?}, align: {align:?}, memory_kind: {kind:?}"
+            "GenMC: memory deallocation, thread: {curr_thread:?} ({genmc_tid:?}), address: {addr} == {addr:#x}, size: {size:?}, align: {align:?}, memory_kind: {kind:?}",
+            addr = address.bytes()
         );
 
         let genmc_address = size_to_genmc(address);

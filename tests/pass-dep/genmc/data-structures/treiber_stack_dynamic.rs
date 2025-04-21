@@ -1,5 +1,6 @@
 //@compile-flags: -Zmiri-ignore-leaks -Zmiri-genmc
 
+// TODO GENMC: maybe use `-Zmiri-genmc-symmetry-reduction`?
 // TODO GENMC: investigate why `-Zmiri-ignore-leaks ` is required
 
 #![no_main]
@@ -21,6 +22,7 @@ const MAX_NODES: usize = 0xFF;
 
 const POISON_IDX: u64 = 0xDEADBEEF;
 
+// TODO GENMC: thread local (for GenMC hazard pointer API)
 // static mut TID: u64 = POISON_IDX;
 
 static mut STACK: MyStack = MyStack::new();
@@ -186,7 +188,7 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
     let num_threads = readers + writers + rdwr;
 
     if readers > MAX_READERS || writers > MAX_WRITERS || rdwr > MAX_RDWR {
-        // std::process::abort();
+        std::process::abort();
     }
 
     let mut i = 0;
@@ -232,7 +234,7 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
             }
         }
 
-        // MyStack::clear_stack(&mut STACK, num_threads);
+        MyStack::clear_stack(&mut STACK, num_threads);
     }
 
     0
