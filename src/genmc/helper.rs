@@ -1,7 +1,8 @@
 use either::Either;
 use rustc_abi::Size;
 use rustc_const_eval::interpret::{InterpCx, InterpResult, interp_ok};
-use rustc_middle::ty::ScalarInt;
+use rustc_middle::mir::Terminator;
+use rustc_middle::ty::{self, ScalarInt};
 use tracing::info;
 
 use super::ffi::GenmcScalar;
@@ -110,13 +111,12 @@ pub fn genmc_scalar_to_scalar<'tcx>(
 pub enum NextInstrInfo {
     None,
     Statement,
-    NonAtomicTerminator,
-    MaybeAtomicTerminator,
+    Terminator { is_atomic: bool },
 }
 
 /// TODO GENMC: DOCUMENTATION
 pub fn get_next_instr_info<'tcx>(
-    _ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
+    ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
     thread_manager: &ThreadManager<'tcx>,
     thread_id: ThreadId,
 ) -> NextInstrInfo {
@@ -141,23 +141,50 @@ pub fn get_next_instr_info<'tcx>(
 
     let terminator = basic_block.terminator();
     info!("GenMC: thread {thread_id:?}, next is a terminator with kind: {:?}", terminator.kind);
+    NextInstrInfo::Terminator { is_atomic: is_terminator_atomic(ecx, terminator, thread_id) }
+}
+
+fn is_terminator_atomic<'tcx>(
+    ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
+    terminator: &Terminator<'tcx>,
+    thread_id: ThreadId,
+) -> bool {
+    // TODO GENMC (PERFORMANCE): this could become a bottleneck,
+    // especially for multithreaded execution, since we need to lock the "symbol interner" to get the name of the intrinsic.
+    // Maybe we could cache this somehow? (TODO: measure impact)
     use rustc_middle::mir::TerminatorKind;
     match &terminator.kind {
         // All atomics are modeled as function calls to intrinsic functions
         TerminatorKind::Call { func, .. } | TerminatorKind::TailCall { func, .. } => {
-            let _func = func;
             // TODO GENMC (Scheduler): change once the required function(s) are public in rustc:
-            // match ecx.instantiate_from_current_frame_and_normalize_erasing_regions(func) {
-            //     Ok(func) => todo!(),
-            //     Err(err) => {
-            //         info!("GenMC: error when checking terminator kind: {err:?}");
-            //         return NextInstrInfo::MaybeAtomicTerminator; // TODO GENMC: currently careful, but could return NonAtomic maybe?
-            //     },
-            // }
-            
-            NextInstrInfo::MaybeAtomicTerminator 
+            info!("GenMC: terminator is a `Call` or `TailCall` with operand: {func:?}");
+            let frame = ecx.machine.threads.get_thread_stack(thread_id).last().unwrap();
+            let func_ty = func.ty(&frame.body().local_decls, *ecx.tcx);
+            info!("GenMC:   Ty of operand: {func_ty:?}");
+            match ecx.instantiate_from_frame_and_normalize_erasing_regions(frame, func_ty) {
+                // match ecx.instantiate_from_current_frame_and_normalize_erasing_regions(func_ty) {
+                Err(err) => {
+                    info!("GenMC: error when checking terminator kind: {err:?}");
+                    // TODO GENMC: currently careful, but could return NonAtomic maybe?
+                    true // possibly atomic?
+                }
+                Ok(func_ty) => {
+                    info!("GenMC: terminator is a function with ty: {func_ty:?}");
+                    match func_ty.kind() {
+                        // Atomics are modeled as intrinsics and can only be called through a `FnDef` (not through `FnPtr`)
+                        ty::FnDef(def_id, _args) => {
+                            info!("GenMC:   function DefId: {def_id:?}");
+                            let Some(intrinsic_def) = ecx.tcx.intrinsic(def_id) else {
+                                return false;
+                            };
+                            intrinsic_def.name.as_str().starts_with("atomic_")
+                        }
+                        _ => false,
+                    }
+                }
+            }
         }
-        _ => NextInstrInfo::NonAtomicTerminator,
+        _ => false,
     }
 }
 

@@ -988,10 +988,7 @@ impl GenmcCtx {
             (thread_info.genmc_tid, thread_info.user_code_finished)
         };
         let next_instr_info = get_next_instr_info(ecx, thread_manager, active_thread_id);
-        let is_next_instr_terminator = matches!(
-            next_instr_info,
-            NextInstrInfo::NonAtomicTerminator | NextInstrInfo::MaybeAtomicTerminator
-        );
+        let is_next_instr_terminator = matches!(next_instr_info, NextInstrInfo::Terminator { .. });
 
         // TODO GENMC (HACK): workaround for GenMC scheduler not handling multiple events per terminator:
         if self.is_handling_terminator.replace(is_next_instr_terminator) {
@@ -1017,30 +1014,14 @@ impl GenmcCtx {
         }
         info!("GenMC: schedule_thread called on terminator");
 
-        // TODO GENMC (PERFORMANCE): maybe re-enable later:
-        // // Skip calling GenMC if not required
-        // let active_thread_id = thread_manager.active_thread();
-        // // Check if thread might be blocked by a `__VERIFIER_assume` statement or similar:
-        // let curr_thread_user_block = self.curr_thread_user_block.replace(false);
-        // if !curr_thread_user_block
-        //     && thread_manager.threads_ref()[active_thread_id].get_state().is_enabled()
-        // {
-        //     if let Some(false) = is_next_instr_load(thread_manager, active_thread_id) {
-        //         // TODO GENMC: this could possibly be improved by skipping checks done in caller of `schedule_thread`
-        //         info!("GenMC: schedule_thread: skip calling GenMC for scheduling");
-        //         return interp_ok(active_thread_id);
-        //     }
-        // }
-
         let (thread_states, enabled_count) = self.get_thread_states(thread_manager, ecx);
         assert_ne!(0, enabled_count);
-
-        info!("GenMC: schedule_thread: thread states: {thread_states:?}");
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut();
         let result = pinned_mc.scheduleNext(&thread_states);
-        info!("GenMC: scheduling result: {result}");
+        info!("GenMC: schedule_thread: states: {thread_states:?}, scheduling result: {result}");
+
         if result >= 0 {
             let genmc_next_thread_id = GenmcThreadIdInner::try_from(result).unwrap();
             assert_eq!(
@@ -1051,16 +1032,10 @@ impl GenmcCtx {
             let genmc_next_thread_id = GenmcThreadId(genmc_next_thread_id);
             let thread_infos = self.thread_infos.borrow();
             let next_thread_id = thread_infos.get_info_genmc(genmc_next_thread_id).miri_tid;
-            info!(
-                "GenMC: next thread to run is {next_thread_id:?} ({genmc_next_thread_id:?}), total {} threads",
-                thread_states.len()
-            );
             interp_ok(next_thread_id)
         } else {
             // Negative result means there is no next thread to schedule
-            info!(
-                "GenMC: scheduleNext returned no thread to schedule. Thread states: {thread_states:?}"
-            );
+            info!("GenMC: scheduleNext returned no thread to schedule");
             // TODO GENMC: stop the current execution and check if there are more if this happens
             // TODO GENMC: maybe add a new `throw_*` for these cases? new InterpErrorKind?
             self.stuck_execution_count.update(|count| count + 1);
@@ -1290,15 +1265,15 @@ impl GenmcCtx {
                 (false, true) => ThreadState::Terminated,
                 (false, false) => ThreadState::Blocked,
             };
-            // TODO GENMC: cache this, only update for current thread (other's don't make progress)
+            // TODO GENMC (PERFORMANCE): cache this, only update for current thread (other's don't make progress)
             let is_next_instr_load = matches!(
                 get_next_instr_info(ecx, thread_manager, thread_id),
-                NextInstrInfo::MaybeAtomicTerminator
-            ); // TODO GENMC (SCHEDULING): actually check next instruction
+                NextInstrInfo::Terminator { is_atomic: true }
+            );
             thread_states[index] = ThreadStateInfo { state, is_next_instr_load };
         }
         // Once there are no threads with non-empty stacks anymore, we allow scheduling threads with empty stacks:
-        // TODO GENMC: decide if this can only happen for the main thread:
+        // TODO GENMC (QUESTION): decide if this can only happen for the main thread:
         if enabled_count == 0 {
             for thread_state in thread_states.iter_mut().rev() {
                 if ThreadState::StackEmpty == thread_state.state {
@@ -1308,7 +1283,7 @@ impl GenmcCtx {
                 }
             }
         }
-        // TODO GENMC (OPTIMIZATION): could possibly skip scheduling call to GenMC if we only have 1 enabled thread (WARNING: may not be correct with GenMC BlockLabels)
+        // TODO GENMC (PERFORMANCE): could possibly skip scheduling call to GenMC if we only have 1 enabled thread (WARNING: may not be correct with GenMC BlockLabels)
         (thread_states, enabled_count)
     }
 

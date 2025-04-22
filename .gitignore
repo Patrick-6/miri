@@ -9,7 +9,7 @@ tex/*/out
 *.mm_profdata
 perf.data
 perf.data.old
-flamegraph.svg
+flamegraph*.svg
 tests/native-lib/libtestlib.so
 .auto-*
 
