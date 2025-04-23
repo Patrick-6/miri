@@ -443,7 +443,7 @@ impl<'tcx> PrimitiveLayouts<'tcx> {
 pub enum ConcurrencyHandler {
     None,
     DataRace(Box<data_race::GlobalState>), // TODO: check if/how this affects performance (vs non-boxed)
-    GenMC(Rc<GenmcCtx>), // TODO: check if/how this affects performance (vs non-boxed)
+    GenMC(Rc<GenmcCtx>),
 }
 
 impl ConcurrencyHandler {

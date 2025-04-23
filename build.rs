@@ -1,10 +1,17 @@
+#[cfg(feature = "genmc")]
 use std::ffi::os_str;
-// use autotools;
-// use autotools::Config;
+#[cfg(feature = "genmc")]
 use std::process::Command;
 
+#[cfg(feature = "genmc")]
 use walkdir::WalkDir;
 
+#[cfg(not(feature = "genmc"))]
+fn main() {
+    println!("cargo:rerun-if-changed=src/genmc/build.rs");
+}
+
+#[cfg(feature = "genmc")]
 fn main() {
     // Build the project in the path `foo` and installs it in `$OUT_DIR`
     // let dst = autotools::build("genmc");

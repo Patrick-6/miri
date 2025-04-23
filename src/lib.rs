@@ -85,7 +85,6 @@ mod clock;
 mod concurrency;
 mod diagnostics;
 mod eval;
-mod genmc;
 mod helpers;
 mod intrinsics;
 mod machine;
@@ -95,6 +94,19 @@ mod operator;
 mod provenance_gc;
 mod range_map;
 mod shims;
+
+cfg_match! {
+    feature = "genmc" => {
+        mod genmc;
+        pub use crate::genmc::{GenmcCtx, GenmcConfig};
+    }
+    _ => {
+        #[path = "genmc/dummy.rs"]
+        mod genmc_dummy;
+        use self::genmc_dummy as genmc;
+        pub use crate::genmc::{GenmcCtx, GenmcConfig};
+    }
+}
 
 // Establish a "crate-wide prelude": we often import `crate::*`.
 // Make all those symbols available in the same place as our own.
@@ -142,8 +154,6 @@ pub use crate::eval::{
     AlignmentCheck, BacktraceStyle, IsolatedOp, MiriConfig, MiriEntryFnType, RejectOpWith,
     ValidationMode, create_ecx, eval_entry,
 };
-// TODO GENMC: check what and how to export here:
-pub use crate::genmc::{GenmcCtx, GenmcConfig, GenmcPrintGraphSetting};
 pub use crate::helpers::{AccessKind, EvalContextExt as _};
 pub use crate::intrinsics::EvalContextExt as _;
 pub use crate::machine::{

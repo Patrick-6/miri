@@ -4,13 +4,13 @@ use crate::MiriConfig;
 // TODO GENMC: document this:
 #[derive(Debug, Default, Clone)]
 pub struct GenmcConfig {
-    pub params: GenmcParams,
-    pub print_graph: GenmcPrintGraphSetting,
+    pub(super) params: GenmcParams,
+    print_graph: GenmcPrintGraphSetting,
 }
 
 // TODO GENMC: document this:
 #[derive(Debug, Default, Clone, Copy)]
-pub enum GenmcPrintGraphSetting {
+enum GenmcPrintGraphSetting {
     #[default]
     None,
     First,
@@ -31,7 +31,7 @@ impl Default for GenmcParams {
 }
 
 impl GenmcConfig {
-    pub fn set_graph_printing(&mut self, param: &str) {
+    fn set_graph_printing(&mut self, param: &str) {
         if !param.starts_with("=") {
             // TODO GENMC: find a good default here:
             self.print_graph = GenmcPrintGraphSetting::First;
@@ -48,7 +48,7 @@ impl GenmcConfig {
         }
     }
 
-    pub fn set_log_level_trace(&mut self) {
+    fn set_log_level_trace(&mut self) {
         self.params.quiet = false;
         self.params.log_level_trace = true;
     }
@@ -91,6 +91,13 @@ impl GenmcConfig {
         } else {
             // TODO GENMC: how to properly handle this?
             panic!("Invalid GenMC argument: \"-Zmiri-genmc-{trimmed_arg}\"");
+        }
+    }
+    
+    pub fn should_print_graph(&self, rep: usize) -> bool {
+        match (self.print_graph, rep) {
+            (GenmcPrintGraphSetting::First, 0) | (GenmcPrintGraphSetting::All, _) => true,
+            _ => false,
         }
     }
 }

@@ -33,7 +33,7 @@ mod helper;
 mod mapping;
 mod thread_info_manager;
 
-pub use self::config::{GenmcConfig, GenmcPrintGraphSetting};
+pub use self::config::GenmcConfig;
 pub use self::ffi::GenmcParams;
 
 /// TODO GENMC: remove this:
@@ -694,7 +694,6 @@ impl GenmcCtx {
         machine: &MiriMachine<'tcx>,
         address: Size,
         size: Size,
-        // value: crate::Scalar,
     ) -> InterpResult<'tcx, ()> {
         if self.allow_data_races.get() {
             // TODO GENMC: handle this properly
@@ -916,8 +915,6 @@ impl GenmcCtx {
 
     pub(crate) fn handle_thread_join(
         &self,
-        // machine: &MiriMachine<'tcx>,
-        // threads: &ThreadManager<'tcx>,
         active_thread_id: ThreadId,
         child_thread_id: ThreadId,
     ) -> Result<(), ()> {

@@ -34,8 +34,8 @@ use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, Once};
 
 use miri::{
-    BacktraceStyle, BorrowTrackerMethod, GenmcConfig, GenmcCtx, GenmcPrintGraphSetting, MiriConfig,
-    MiriEntryFnType, ProvenanceMode, RetagFields, ValidationMode,
+    BacktraceStyle, BorrowTrackerMethod, GenmcConfig, GenmcCtx, MiriConfig, MiriEntryFnType,
+    ProvenanceMode, RetagFields, ValidationMode,
 };
 use rustc_abi::ExternAbi;
 use rustc_data_structures::sync;
@@ -242,10 +242,8 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
 
                 // TODO GENMC: is this the correct place to put this?
 
-                match (genmc_config.print_graph, rep) {
-                    (GenmcPrintGraphSetting::First, 0) | (GenmcPrintGraphSetting::All, _) =>
-                        genmc_ctx.print_genmc_graph(),
-                    _ => {}
+                if genmc_config.should_print_graph(rep) {
+                    genmc_ctx.print_genmc_graph();
                 }
 
                 // TODO GENMC (ERROR REPORTING): we currently do this here, so we can still print the GenMC graph above
