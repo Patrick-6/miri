@@ -10,8 +10,7 @@ use self::helper::{
 use self::thread_info_manager::{GenmcThreadId, GenmcThreadIdInner, ThreadInfoManager};
 use crate::intrinsics::AtomicOp;
 use crate::{
-    AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, MemoryKind, MiriMachine, Scalar,
-    TerminationInfo, ThreadId, ThreadManager,
+    AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, MemoryKind, MiriConfig, MiriMachine, Scalar, TerminationInfo, ThreadId, ThreadManager
 };
 
 mod config;
@@ -30,7 +29,14 @@ pub struct GenmcCtx {
 }
 
 impl GenmcCtx {
-    pub fn new(_config: &GenmcConfig) -> Self {
+    /// Validate the selected configuration options and create a new `GenmcCtx` if successful
+    /// 
+    /// Some combinations of options are not allowed:
+    /// - Aliasing model checking is incompatible with GenMC mode
+    ///   - The reason is that the required information is lost when pointers are send to GenMC and back
+    /// - Data race checking and weak memory emulation must be turned off, since GenMC does this by itself
+    /// - "Many seeds" mode in Miri is currently incompatible with GenMC mode
+    pub fn try_new(_miri_config: &MiriConfig) -> Option<Self> {
         todo!()
     }
 

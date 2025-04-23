@@ -493,11 +493,6 @@ impl<'tcx> ThreadManager<'tcx> {
         &mut self.threads[self.active_thread].stack
     }
 
-    /// TODO GENMC: this function can probably be removed once the GenmcCtx code is finished:
-    pub fn get_thread_stack(&self, id: ThreadId) -> &[Frame<'tcx, Provenance, FrameExtra<'tcx>>] {
-        &self.threads[id].stack
-    }
-
     pub fn all_stacks(
         &self,
     ) -> impl Iterator<Item = (ThreadId, &[Frame<'tcx, Provenance, FrameExtra<'tcx>>])> {
@@ -585,8 +580,6 @@ impl<'tcx> ThreadManager<'tcx> {
     fn detach_thread(&mut self, id: ThreadId, allow_terminated_joined: bool) -> InterpResult<'tcx> {
         trace!("detaching {:?}", id);
 
-        tracing::info!("GenMC: TODO GENMC: does GenMC need special handling for detached threads?");
-
         let is_ub = if allow_terminated_joined && self.threads[id].state.is_terminated() {
             // "Detached" in particular means "not yet joined". Redundant detaching is still UB.
             self.threads[id].join_status == ThreadJoinStatus::Detached
@@ -612,8 +605,6 @@ impl<'tcx> ThreadManager<'tcx> {
             throw_ub_format!("trying to join a detached thread");
         }
 
-        // TODO GENMC (CLEANUP):
-        // fn handle_join(threads: &mut ThreadManager, concurrency_handler: &ConcurrencyHandler) {
         fn handle_join(
             threads: &mut ThreadManager<'_>,
             joined_thread_id: ThreadId,
@@ -747,6 +738,7 @@ impl<'tcx> ThreadManager<'tcx> {
 
         let clock = &ecx.machine.monotonic_clock;
 
+        // In GenMC mode, we let GenMC do the scheduling
         if let Some(genmc_ctx) = ecx.machine.concurrency_handler.as_genmc_ref() {
             let thread_manager = &ecx.machine.threads;
             if let Some(sleep_time) = thread_manager.next_callback_wait_time(clock) {
@@ -769,7 +761,6 @@ impl<'tcx> ThreadManager<'tcx> {
         ecx.machine.threads.schedule_impl(clock)
     }
 
-    // TODO GENMC (SCHEDULER): Document this:
     fn schedule_impl(&mut self, clock: &MonotonicClock) -> InterpResult<'tcx, SchedulingAction> {
         // This thread and the program can keep going.
         if self.threads[self.active_thread].state.is_enabled() && !self.yield_active_thread {
@@ -794,7 +785,6 @@ impl<'tcx> ThreadManager<'tcx> {
         // `skip(N)` means we start iterating at thread N, so we skip 1 more to start just *after*
         // the active thread. Then after that we look at `take(N)`, i.e., the threads *before* the
         // active thread.
-        //
 
         let threads = self
             .threads

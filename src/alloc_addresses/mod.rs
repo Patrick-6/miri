@@ -9,7 +9,6 @@ use std::cmp::max;
 use rand::Rng;
 use rustc_abi::{Align, Size};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
-use tracing::debug;
 
 use self::reuse_pool::ReusePool;
 use crate::concurrency::VClock;
@@ -117,9 +116,9 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
         let this = self.eval_context_ref();
         let info = this.get_alloc_info(alloc_id);
 
+        // Due to additional constraints on addresses in GenMC mode, we let GenMC allocate them
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
             let addr = genmc_ctx.handle_alloc(&this.machine, info.size, info.align, memory_kind)?;
-            debug!("addr_from_alloc_id_uncached: {alloc_id:?} --> {addr}");
             return interp_ok(addr);
         }
 

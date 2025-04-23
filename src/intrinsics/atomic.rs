@@ -65,7 +65,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             }
         }
 
-        // TODO GENMC: notify GenMC about atomics
         match &*intrinsic_structure {
             ["load", ord] => this.atomic_load(args, dest, read_ord(ord))?,
             ["store", ord] => this.atomic_store(args, write_ord(ord))?,
@@ -164,8 +163,8 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
     ) -> InterpResult<'tcx> {
         let [] = check_intrinsic_arg_count(args)?;
         let _ = atomic;
-        //FIXME: compiler fences are currently ignored
-        // TODO GENMC: compiler fences?
+        // FIXME: compiler fences are currently ignored
+        // FIXME: (also ignored in GenMC mode)
         interp_ok(())
     }
 
@@ -200,19 +199,16 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
                 "atomic arithmetic operations only work on integer and raw pointer types",
             );
         }
-        // TODO GENMC: should this check be done in GenMC mode?
         if rhs.layout.ty != place.layout.ty {
             span_bug!(this.cur_span(), "atomic arithmetic operation type mismatch");
         }
 
         // Inform GenMC about the atomic rmw operation.
-        // TODO GENMC: is this the correct place to put this?
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
             let address = place.ptr().addr();
             let size = place.layout.size;
             let rhs_scalar = rhs.to_scalar();
             let is_unsigned = matches!(rhs.layout.ty.kind(), ty::Uint(_));
-            // TODO GENMC: do we need the `is_success` value?
             let (old, _is_success) = genmc_ctx.atomic_rmw_op(
                 this,
                 address,
@@ -239,7 +235,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
                 }
             }
         }
-        interp_ok(()) // TODO GENMC: is it ok to move the interp_ok call outside the match statement?
+        interp_ok(())
     }
 
     fn atomic_exchange(
@@ -259,10 +255,13 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
 
         // Inform GenMC about the atomic atomic exchange.
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-            let address = place.ptr().addr();
-            let size = place.layout.size;
-            // TODO GENMC: do we need the `is_success` value?
-            let (old, _is_success) = genmc_ctx.atomic_exchange(this, address, size, new, atomic)?;
+            let (old, _is_success) = genmc_ctx.atomic_exchange(
+                this,
+                place.ptr().addr(),
+                place.layout.size,
+                new,
+                atomic,
+            )?;
             this.write_scalar(old, dest)?; // old value is returned
         }
 

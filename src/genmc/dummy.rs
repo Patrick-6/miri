@@ -16,7 +16,7 @@ pub struct GenmcConfig {}
 // TODO GENMC: add all exposed methods here too
 
 impl GenmcCtx {
-    pub fn new(_config: &GenmcConfig) -> Self {
+    pub fn try_new(_miri_config: &MiriConfig) -> Option<Self> {
         unimplemented!("GenMC feature in Miri is currently disabled.");
     }
 

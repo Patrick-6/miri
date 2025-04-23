@@ -463,9 +463,17 @@ impl ConcurrencyHandler {
         if let Self::GenMC(genmc_ctx) = self { Some(genmc_ctx) } else { None }
     }
 
-    // pub fn as_genmc_mut(&mut self) -> Option<&mut GenmcCtx> {
-    //     if let Self::GenMC(genmc_ctx) = self { Some(genmc_ctx) } else { None }
-    // }
+    pub fn set_ongoing_action_data_race_free(&self, enable: bool) {
+        match self {
+            ConcurrencyHandler::None => {}
+            ConcurrencyHandler::DataRace(data_race) => {
+                data_race.set_ongoing_action_data_race_free(enable);
+            }
+            ConcurrencyHandler::GenMC(genmc_ctx) => {
+                genmc_ctx.set_ongoing_action_data_race_free(enable);
+            }
+        }
+    }
 }
 
 impl VisitProvenance for ConcurrencyHandler {

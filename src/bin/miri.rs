@@ -180,25 +180,18 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
                     optimizations is usually marginal at best.");
         }
 
-        let genmc_ctx = config
-            .genmc_config
-            .as_ref()
-            .map(|genmc_config| {
-                // FIXME: Currently GenMC mode incompatible with aliasing model checking
-                assert_eq!(
-                    None, config.borrow_tracker,
-                    "FIXME: GenMC Mode is incompatible with aliasing model checking"
-                );
-                GenmcCtx::new(genmc_config)
-            })
-            .map(Rc::new);
-        // TODO GENMC: handle this:
-        assert!(
-            !(self.many_seeds.is_some() && config.genmc_config.is_some()),
-            "GenMC mode is incompatible with many seeds mode (currently(?))"
-        );
+        if let Some(_genmc_config) = &config.genmc_config {
+            let _genmc_ctx = Rc::new(GenmcCtx::try_new(&config).unwrap_or_else(|| {
+                // FIXME: provide a better error message
+                tcx.dcx().fatal("Cannot create GenMC context");
+            }));
+
+            todo!("GenMC mode not yet implemented");
+            // std::process::exit(return_code);
+        };
 
         if let Some(many_seeds) = self.many_seeds.take() {
+            assert!(config.genmc_config.is_none());
             assert!(config.seed.is_none());
             let exit_code = sync::IntoDynSyncSend(AtomicI32::new(rustc_driver::EXIT_SUCCESS));
             let num_failed = sync::IntoDynSyncSend(AtomicU32::new(0));
@@ -224,62 +217,6 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
                 eprintln!("{num_failed}/{total} SEEDS FAILED", total = many_seeds.seeds.count());
             }
             std::process::exit(exit_code.0.into_inner());
-        } else if let Some(genmc_ctx) = genmc_ctx {
-            let genmc_config = config.genmc_config.as_ref().unwrap();
-
-            // TODO GENMC: remove this (it's here to prevent infinite loops during development):
-            let max_reps = 1024;
-
-            for rep in 0..max_reps {
-                tracing::info!("MIRI: running GenMC loop {}/{max_reps}", rep + 1);
-                let result = miri::eval_entry(
-                    tcx,
-                    entry_def_id,
-                    entry_type,
-                    &config,
-                    Some(genmc_ctx.clone()),
-                );
-
-                // TODO GENMC: is this the correct place to put this?
-
-                if genmc_config.should_print_graph(rep) {
-                    genmc_ctx.print_genmc_graph();
-                }
-
-                // TODO GENMC (ERROR REPORTING): we currently do this here, so we can still print the GenMC graph above
-                let return_code = result.unwrap_or_else(|| {
-                    tcx.dcx().abort_if_errors();
-                    rustc_driver::EXIT_FAILURE
-                });
-
-                let is_exploration_done = genmc_ctx.is_exploration_done();
-
-                tracing::info!(
-                    "(GenMC Mode) Execution done (return code: {return_code}), is_exploration_done: {is_exploration_done}",
-                );
-
-                if is_exploration_done {
-                    // TODO GENMC: proper message here, which info should be printed?
-                    let stuck_execution_count = genmc_ctx.get_stuck_execution_count();
-                    if stuck_execution_count == 0 {
-                        eprintln!("(GenMC Mode) Finished after {} iterations.", rep + 1);
-                    } else {
-                        // TODO GENMC: how should this be reported to the user?
-                        eprintln!(
-                            "(GenMC Mode) Finished after {} iterations, with {stuck_execution_count} {} getting stuck.",
-                            rep + 1,
-                            if stuck_execution_count == 1 { "execution" } else { "executions" }
-                        );
-                    }
-
-                    // TODO GENMC: what is an appropriate return code? (since there are possibly many)
-                    std::process::exit(return_code);
-                }
-            }
-            eprintln!(
-                "(GenMC Mode) Could not explore all interleavings in {max_reps} repetitions!"
-            );
-            std::process::exit(1);
         } else {
             let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, &config, None)
                 .unwrap_or_else(|| {

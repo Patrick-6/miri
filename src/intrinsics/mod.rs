@@ -3,7 +3,7 @@
 mod atomic;
 mod simd;
 
-// TODO GENMC: is exposing this type ok?
+// FIXME GENMC: is this ok to be pub?
 pub use self::atomic::AtomicOp;
 
 use rand::Rng;

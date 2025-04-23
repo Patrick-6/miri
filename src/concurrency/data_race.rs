@@ -699,24 +699,18 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         // Only metadata on the location itself is used.
 
         // Inform GenMC about the atomic load.
-        // TODO GENMC: suboptimal, this doesn't need to run during non-GenMC mode:
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
             let address = place.ptr().addr();
-            let size = place.layout.size;
-            // TODO GENMC: handling mixed atomics/non-atomics:
+            // FIXME: pass what value would be loaded if we did a non-atomic load here, to support mixed atomics/non-atomics:
             let old_val = None;
-            // let old_val = this.run_for_validation_ref(|this| this.read_scalar(place)).discard_err();
-            genmc_ctx.atomic_load(this, address, size, atomic, old_val)
-        } else {
-            // TODO GENMC: this may need to be replaced, and the value should be requested from GenMC instead:
-            let scalar = this.allow_data_races_ref(move |this| this.read_scalar(place))?;
-            let buffered_scalar = this.buffered_atomic_read(place, atomic, scalar, || {
-                this.validate_atomic_load(place, atomic)
-            })?;
-            let value = buffered_scalar.ok_or_else(|| err_ub!(InvalidUninitBytes(None)))?;
-
-            interp_ok(value)
+            return genmc_ctx.atomic_load(this, address, place.layout.size, atomic, old_val);
         }
+
+        let scalar = this.allow_data_races_ref(move |this| this.read_scalar(place))?;
+        let buffered_scalar = this.buffered_atomic_read(place, atomic, scalar, || {
+            this.validate_atomic_load(place, atomic)
+        })?;
+        interp_ok(buffered_scalar.ok_or_else(|| err_ub!(InvalidUninitBytes(None)))?)
     }
 
     /// Perform an atomic write operation at the memory location.
@@ -734,7 +728,6 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         // This is also a very special exception where we just ignore an error -- if this read
         // was UB e.g. because the memory is uninitialized, we don't want to know!
 
-        // TODO GENMC: check if this validation is still required in GenMC mode
         let old_val = this.run_for_validation_mut(|this| this.read_scalar(dest)).discard_err();
         this.allow_data_races_mut(move |this| this.write_scalar(val, dest))?;
         this.validate_atomic_store(dest, atomic)?;
@@ -746,7 +739,6 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
             genmc_ctx.atomic_store(this, address, size, val, atomic)?;
         }
 
-        // TODO GENMC: is this required in GenMC mode?:
         this.buffered_atomic_write(val, dest, atomic, old_val)
     }
 
@@ -887,7 +879,6 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
     fn atomic_fence(&mut self, atomic: AtomicFenceOrd) -> InterpResult<'tcx> {
         let this = self.eval_context_mut();
         let current_span = this.machine.current_span();
-        // TODO GENMC: why was this a `&mut` ?
         match &this.machine.concurrency_handler {
             machine::ConcurrencyHandler::None => interp_ok(()),
             machine::ConcurrencyHandler::DataRace(data_race) => {
@@ -966,7 +957,6 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
                 .as_data_race_ref()?
                 .release_clock(&this.machine.threads, callback),
         )
-        // TODO GENMC: does GenMC need to be informed about this?
     }
 
     /// Acquire the given clock into the current thread, establishing synchronization with
@@ -976,7 +966,6 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         if let ConcurrencyHandler::DataRace(data_race) = &this.machine.concurrency_handler {
             data_race.acquire_clock(clock, &this.machine.threads);
         }
-        // TODO GENMC: does GenMC need to be informed about this?
     }
 }
 
@@ -1176,7 +1165,6 @@ impl VClockAlloc {
         machine: &MiriMachine<'_>,
     ) -> InterpResult<'tcx> {
         let current_span = machine.current_span();
-        // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
         let global = machine.concurrency_handler.as_data_race_ref().unwrap();
         if !global.race_detecting() {
             return interp_ok(());
@@ -1219,7 +1207,6 @@ impl VClockAlloc {
         machine: &mut MiriMachine<'_>,
     ) -> InterpResult<'tcx> {
         let current_span = machine.current_span();
-        // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
         let global = machine.concurrency_handler.as_data_race_mut().unwrap();
         if !global.race_detecting() {
             return interp_ok(());
@@ -1274,7 +1261,6 @@ impl Default for LocalClocks {
 impl FrameState {
     pub fn local_write(&self, local: mir::Local, storage_live: bool, machine: &MiriMachine<'_>) {
         let current_span = machine.current_span();
-        // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
         let global = machine.concurrency_handler.as_data_race_ref().unwrap();
         if !global.race_detecting() {
             return;
@@ -1305,7 +1291,6 @@ impl FrameState {
 
     pub fn local_read(&self, local: mir::Local, machine: &MiriMachine<'_>) {
         let current_span = machine.current_span();
-        // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
         let global = machine.concurrency_handler.as_data_race_ref().unwrap();
         if !global.race_detecting() {
             return;
@@ -1329,8 +1314,6 @@ impl FrameState {
         alloc: &mut VClockAlloc,
         machine: &MiriMachine<'_>,
     ) {
-        // TODO GENMC: inform GenMC about the variable (since it might now be relevant to GenMC)
-        tracing::info!("GenMC: TODO GENMC: local_moved_to_memory: {local:?}");
         let global = machine.concurrency_handler.as_data_race_ref().unwrap();
         if !global.race_detecting() {
             return;
@@ -1364,18 +1347,9 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
     #[inline]
     fn allow_data_races_ref<R>(&self, op: impl FnOnce(&MiriInterpCx<'tcx>) -> R) -> R {
         let this = self.eval_context_ref();
-        // TODO GENMC: is this relevant for GenMC? Does GenMC need to know about these racy accesses?
-        tracing::info!(
-            "GenMC: allow_data_races_ref: TODO GENMC: does GenMC need to know about this?"
-        );
-        if let Some(data_race) = this.machine.concurrency_handler.as_data_race_ref() {
-            let old = data_race.ongoing_action_data_race_free.replace(true);
-            assert!(!old, "cannot nest allow_data_races");
-        }
+        this.machine.concurrency_handler.set_ongoing_action_data_race_free(true);
         let result = op(this);
-        if let Some(data_race) = this.machine.concurrency_handler.as_data_race_ref() {
-            data_race.ongoing_action_data_race_free.set(false);
-        }
+        this.machine.concurrency_handler.set_ongoing_action_data_race_free(false);
         result
     }
 
@@ -1385,29 +1359,9 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
     #[inline]
     fn allow_data_races_mut<R>(&mut self, op: impl FnOnce(&mut MiriInterpCx<'tcx>) -> R) -> R {
         let this = self.eval_context_mut();
-        tracing::info!("GenMC: allow_data_races_mut");
-        match &this.machine.concurrency_handler {
-            ConcurrencyHandler::None => {}
-            ConcurrencyHandler::DataRace(data_race) => {
-                let old = data_race.ongoing_action_data_race_free.replace(true);
-                assert!(!old, "cannot nest allow_data_races");
-            }
-            ConcurrencyHandler::GenMC(genmc_ctx) => {
-                genmc_ctx.set_ongoing_action_data_race_free(true);
-            }
-        }
-
+        this.machine.concurrency_handler.set_ongoing_action_data_race_free(true);
         let result = op(this);
-
-        match &this.machine.concurrency_handler {
-            ConcurrencyHandler::None => {}
-            ConcurrencyHandler::DataRace(data_race) => {
-                data_race.ongoing_action_data_race_free.set(false);
-            }
-            ConcurrencyHandler::GenMC(genmc_ctx) => {
-                genmc_ctx.set_ongoing_action_data_race_free(false);
-            }
-        }
+        this.machine.concurrency_handler.set_ongoing_action_data_race_free(false);
         result
     }
 
@@ -1623,11 +1577,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
 
                 interp_ok(())
             }
-            ConcurrencyHandler::GenMC(_genmc_ctx) => {
-                // TODO GENMC: how does GenMC validate atomic operations? Does it need to be called here?
-                tracing::info!("GenMC: TODO GENMC: check how it validates atomic ops");
-                interp_ok(())
-            }
+            ConcurrencyHandler::GenMC(_genmc_ctx) => interp_ok(()),
         }
     }
 }
@@ -1658,6 +1608,15 @@ impl GlobalState {
             .push(ThreadExtraState { vector_index: Some(index), termination_vector_clock: None });
 
         global_state
+    }
+
+    /// Select whether data race free actions should be allowed.
+    ///
+    /// # PANICS
+    /// If data race free is attempted to be set more than once (no nesting allowed)
+    pub fn set_ongoing_action_data_race_free(&self, enable: bool) {
+        let old = self.ongoing_action_data_race_free.replace(enable);
+        assert_ne!(old, enable, "cannot nest allow_data_races");
     }
 
     // We perform data race detection when there are more than 1 active thread
