@@ -494,16 +494,13 @@ pub fn eval_entry<'tcx>(
     if ecx.machine.concurrency_handler.as_genmc_ref().is_some() {
         tracing::info!("GenMC: execution returned error: {err:?}");
         match err.kind() {
-            InterpErrorKind::Unsupported(unsupported_op_info) => {
-                match unsupported_op_info {
-                    UnsupportedOpInfo::Unsupported(msg) if msg == "GenMC Execution stuck" => {
-                        // TODO GENMC: maybe emit a warning here?
-                        tracing::info!(
-                            "GenMC: found stuck execution, not reporting this as an error"
-                        );
-                        return Some(0);
-                    }
-                    _ => {}
+            InterpErrorKind::MachineStop(reason) => {
+                if let Some(TerminationInfo::GenmcStuckExecution) =
+                    reason.downcast_ref::<TerminationInfo>()
+                {
+                    // TODO GENMC: maybe emit a warning here?
+                    tracing::info!("GenMC: found stuck execution, not reporting this as an error");
+                    return Some(0);
                 }
             }
             _ => {}

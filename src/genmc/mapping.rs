@@ -34,6 +34,7 @@ impl AtomicFenceOrd {
 }
 
 impl AtomicRwOrd {
+    // TODO GENMC: document that these are both success orderings
     pub(super) fn to_genmc_memory_orderings(self) -> (MemOrdering, MemOrdering) {
         match self {
             // TODO GENMC: check if we need to implement Release ==> (Release, Release)

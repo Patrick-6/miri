@@ -8,7 +8,7 @@ use rand::prelude::*;
 use rand::rngs::StdRng;
 use rustc_abi::{Align, Size};
 use rustc_const_eval::interpret::{InterpCx, InterpResult, interp_ok};
-use rustc_middle::{throw_ub_format, throw_unsup_format};
+use rustc_middle::{throw_machine_stop, throw_ub_format, throw_unsup_format};
 use tracing::{info, warn};
 
 use self::cxx_extra::NonNullUniquePtr;
@@ -24,7 +24,7 @@ use self::thread_info_manager::{GenmcThreadId, GenmcThreadIdInner, ThreadInfoMan
 use crate::intrinsics::AtomicOp;
 use crate::{
     AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, MemoryKind, MiriMachine, Scalar,
-    ThreadId, ThreadManager,
+    TerminationInfo, ThreadId, ThreadManager,
 };
 
 mod config;
@@ -272,7 +272,6 @@ mod ffi {
         fn handleUserBlock(self: Pin<&mut MiriGenMCShim>, thread_id: i32);
 
         fn scheduleNext(self: Pin<&mut MiriGenMCShim>, thread_states: &[ThreadStateInfo]) -> i64;
-        fn setTerminatorEnd(self: Pin<&mut MiriGenMCShim>, thread_id: i32);
 
         fn isHalting(self: &MiriGenMCShim) -> bool;
         fn isMoot(self: &MiriGenMCShim) -> bool;
@@ -310,8 +309,6 @@ pub struct GenmcCtx {
 
     // TODO GENMC (HACK): we make one large allocation to then use for ZSTs, to reduce the number of events we create for GenMC
     zst_allocation_range: Cell<(usize, usize, usize)>,
-
-    is_handling_terminator: Cell<bool>,
 }
 
 /// Convert an address selected by GenMC into Miri's type for addresses.
@@ -353,7 +350,6 @@ impl GenmcCtx {
         let stuck_execution_count = Cell::new(0);
         let curr_thread_user_block = Cell::new(false);
         let zst_allocation_range = Cell::new((0, 0, 0));
-        let is_handling_terminator = Cell::new(false);
 
         Self {
             handle: non_null_handle,
@@ -363,7 +359,6 @@ impl GenmcCtx {
             stuck_execution_count,
             curr_thread_user_block,
             zst_allocation_range,
-            is_handling_terminator,
         }
     }
 
@@ -804,9 +799,9 @@ impl GenmcCtx {
         }
         // kind: MemoryKind, TODO GENMC: Does GenMC care about the kind of Memory?
 
-        let alignment = alignment.bytes_usize();
-
         let chosen_address = {
+            let alignment = alignment.bytes_usize();
+
             let mut mc = self.handle.borrow_mut();
             let pinned_mc = mc.as_mut();
             let genmc_address = pinned_mc.handleMalloc(genmc_tid.0, genmc_size, alignment);
@@ -818,6 +813,13 @@ impl GenmcCtx {
             }
             to_miri_size(genmc_address).bytes()
         };
+        // Sanity check the address alignment:
+        assert_eq!(
+            0,
+            chosen_address % alignment.bytes(),
+            "GenMC returned address {chosen_address} == {chosen_address:#x} with lower alignment than requested ({:})!",
+            alignment.bytes()
+        );
 
         if !SKIP_DUMMY_INITIALIZATION {
             info!(
@@ -981,21 +983,6 @@ impl GenmcCtx {
     ) -> InterpResult<'tcx, ThreadId> {
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let active_thread_id = thread_manager.active_thread();
-        let (genmc_tid, thread_user_code_finished) = {
-            let thread_infos = self.thread_infos.borrow();
-            let thread_info = thread_infos.get_info(active_thread_id);
-            // TODO GENMC: maybe just make `ThreadInfo` copy?
-            (thread_info.genmc_tid, thread_info.user_code_finished)
-        };
-        let next_instr_info = get_next_instr_info(ecx, thread_manager, active_thread_id);
-        let is_next_instr_terminator = matches!(next_instr_info, NextInstrInfo::Terminator { .. });
-
-        // TODO GENMC (HACK): workaround for GenMC scheduler not handling multiple events per terminator:
-        if self.is_handling_terminator.replace(is_next_instr_terminator) {
-            let mut mc = self.handle.borrow_mut();
-            let pinned_mc = mc.as_mut();
-            pinned_mc.setTerminatorEnd(genmc_tid.0);
-        }
 
         // We need to ask GenMC for a scheduling decision if:
         // - We are about to execute a MIR Terminator
@@ -1003,10 +990,17 @@ impl GenmcCtx {
         // - The current thread is blocked
         // - We just executed a GenMC `UserBlock` (this is not covered by the previous case, since Miri doesn't see `UserBlock`s)
         let curr_thread_user_block = self.curr_thread_user_block.replace(false);
+        let thread_user_code_finished = {
+            let thread_infos = self.thread_infos.borrow();
+            thread_infos.get_info(active_thread_id).user_code_finished
+        };
+        let next_instr_info = get_next_instr_info(ecx, thread_manager, active_thread_id);
+        let is_next_instr_atomic_load =
+            matches!(next_instr_info, NextInstrInfo::Terminator { is_atomic: true });
         if !curr_thread_user_block
             && !thread_user_code_finished
             && thread_manager.threads_ref()[active_thread_id].get_state().is_enabled()
-            && !is_next_instr_terminator
+            && !is_next_instr_atomic_load
         {
             info!("GenMC: schedule_thread called, but no scheduling decision required...");
             // TODO GENMC: skip the checks in the calling function in this case:
@@ -1036,31 +1030,10 @@ impl GenmcCtx {
         } else {
             // Negative result means there is no next thread to schedule
             info!("GenMC: scheduleNext returned no thread to schedule");
-            // TODO GENMC: stop the current execution and check if there are more if this happens
-            // TODO GENMC: maybe add a new `throw_*` for these cases? new InterpErrorKind?
+            // TODO GENMC: don't keep track of this, ask GenMC for the count instead:
             self.stuck_execution_count.update(|count| count + 1);
-            throw_unsup_format!("GenMC Execution stuck");
-            // "GenMC returned no thread to schedule next: TODO GENMC: is this showing a deadlock or a bug?"
-            // throw_machine_stop!();_
-            // throw_machine_stop_str!(
-            //     "GenMC returned no thread to schedule, aborting this execution..."
-            // )
-            // todo!();
+            throw_machine_stop!(TerminationInfo::GenmcStuckExecution);
         }
-
-        // let enabled_thread_count = thread_manager.get_enabled_thread_count();
-        // let mut i = self.rng.borrow_mut().random_range(0..enabled_thread_count);
-        // for (thread_id, thread) in thread_manager.threads_ref().iter_enumerated() {
-        //     if !thread.get_state().is_enabled() {
-        //         continue;
-        //     }
-        //     if i != 0 {
-        //         i -= 1;
-        //         continue;
-        //     }
-        //     return Ok(thread_id);
-        // }
-        // unreachable!()
     }
 
     /**** Blocking instructions ****/

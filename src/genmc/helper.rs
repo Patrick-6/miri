@@ -109,7 +109,7 @@ pub fn genmc_scalar_to_scalar<'tcx>(
 }
 
 pub enum NextInstrInfo {
-    None,
+    None, // TODO GENMC: reduce this to 1 bool
     Statement,
     Terminator { is_atomic: bool },
 }
@@ -125,12 +125,13 @@ pub fn get_next_instr_info<'tcx>(
         return NextInstrInfo::None;
     };
     let Either::Left(loc) = frame.current_loc() else {
-        todo!("TODO GENMC: can we get here?");
-        // // We are unwinding and this fn has no cleanup code.
-        // // Just go on unwinding.
-        // trace!("unwinding: skipping frame");
-        // self.return_from_current_stack_frame(/* unwinding */ true)?;
-        // return interp_ok(true);
+        return NextInstrInfo::None;
+    //     todo!("TODO GENMC: can we get here?");
+    //     // // We are unwinding and this fn has no cleanup code.
+    //     // // Just go on unwinding.
+    //     // trace!("unwinding: skipping frame");
+    //     // self.return_from_current_stack_frame(/* unwinding */ true)?;
+    //     // return interp_ok(true);
     };
     let basic_block = &frame.body().basic_blocks[loc.block];
 
@@ -167,6 +168,7 @@ fn is_terminator_atomic<'tcx>(
                     info!("GenMC: error when checking terminator kind: {err:?}");
                     // TODO GENMC: currently careful, but could return NonAtomic maybe?
                     true // possibly atomic?
+                    // TODO GENMC: use ? here, make result interp_result
                 }
                 Ok(func_ty) => {
                     info!("GenMC: terminator is a function with ty: {func_ty:?}");
@@ -177,6 +179,7 @@ fn is_terminator_atomic<'tcx>(
                             let Some(intrinsic_def) = ecx.tcx.intrinsic(def_id) else {
                                 return false;
                             };
+                            // TODO GENMC: make this more precise (only loads)
                             intrinsic_def.name.as_str().starts_with("atomic_")
                         }
                         _ => false,

@@ -31,6 +31,8 @@ pub enum TerminationInfo {
     },
     Int2PtrWithStrictProvenance,
     Deadlock,
+    /// TODO GENMC (DOCUMENTATION): maybe add explanation for this here
+    GenmcStuckExecution,
     MultipleSymbolDefinitions {
         link_name: Symbol,
         first: SpanData,
@@ -75,6 +77,8 @@ impl fmt::Display for TerminationInfo {
             StackedBorrowsUb { msg, .. } => write!(f, "{msg}"),
             TreeBorrowsUb { title, .. } => write!(f, "{title}"),
             Deadlock => write!(f, "the evaluated program deadlocked"),
+            // TODO GENMC: proper message here:
+            GenmcStuckExecution => write!(f, "GenMC determined that the execution got stuck"),
             MultipleSymbolDefinitions { link_name, .. } =>
                 write!(f, "multiple definitions of symbol `{link_name}`"),
             SymbolShimClashing { link_name, .. } =>
@@ -235,6 +239,7 @@ pub fn report_error<'tcx>(
             StackedBorrowsUb { .. } | TreeBorrowsUb { .. } | DataRace { .. } =>
                 Some("Undefined Behavior"),
             Deadlock => Some("deadlock"),
+            GenmcStuckExecution => unreachable!("GenMC: stuck execution should be handled already"),
             MultipleSymbolDefinitions { .. } | SymbolShimClashing { .. } => None,
         };
         #[rustfmt::skip]
