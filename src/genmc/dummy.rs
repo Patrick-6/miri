@@ -28,14 +28,6 @@ impl GenmcCtx {
         unreachable!()
     }
 
-    pub fn is_halting(&self) -> bool {
-        unreachable!()
-    }
-
-    pub fn is_moot(&self) -> bool {
-        unreachable!()
-    }
-
     pub fn is_exploration_done(&self) -> bool {
         unreachable!()
     }

@@ -27,7 +27,6 @@ chrono = { version = "0.4.38", default-features = false }
 chrono-tz = "0.10"
 directories = "6"
 bitflags = "2.6"
-cxx = { version = "1.0.143", features = ["c++20"], optional = true }
 
 # Copied from `compiler/rustc/Cargo.toml`.
 # But only for some targets, it fails for others. Rustc configures this in its CI, but we can't
@@ -65,20 +64,14 @@ name = "ui"
 harness = false
 
 [features]
-# TODO GENMC (DEBUGGING): `genmc` feature should be turned off in upstream repo for now
-default = ["stack-cache", "genmc"]
-# default = ["stack-cache"]
-genmc = ["dep:cxx-build", "dep:walkdir", "dep:cxx"]
+default = ["stack-cache"]
+genmc = []
 stack-cache = []
 stack-cache-consistency-check = ["stack-cache"]
 
 [lints.rust.unexpected_cfgs]
 level = "warn"
 check-cfg = ['cfg(bootstrap)']
-
-[build-dependencies]
-cxx-build = { version = "1.0.143", features = ["parallel"], optional = true }
-walkdir = { version = "2.5.0", optional = true }
 
 # Be aware that this file is inside a workspace when used via the
 # submodule in the rustc repo. That means there are many cargo features
