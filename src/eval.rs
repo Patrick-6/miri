@@ -227,13 +227,6 @@ impl<'tcx> MainThreadState<'tcx> {
         this: &mut MiriInterpCx<'tcx>,
     ) -> InterpResult<'tcx, Poll<()>> {
         use MainThreadState::*;
-        // TODO GENMC: does this also need to happen on other threads?
-        // TODO GENMC: is this still required since it's already called in `run_on_stack_empty`?
-        if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-            let thread_id = this.active_thread();
-            // TODO GENMC: thread_id should always be ThreadId::MAIN_THREAD here
-            genmc_ctx.thread_stack_empty(thread_id);
-        }
         match self {
             Running => {
                 *self = TlsDtors(Default::default());
@@ -242,18 +235,23 @@ impl<'tcx> MainThreadState<'tcx> {
                 match state.on_stack_empty(this)? {
                     Poll::Pending => {} // just keep going
                     Poll::Ready(()) => {
+                        if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
+                            // We don't need to yield in GenMC mode, this will be handled by the GenmcCtx
+                            *self = Done;
+
+                            // FIXME: This may be considered a HACK: we need to inform the GenmcCtx that the main thread is done.
+                            // If we let the main thread end here, then any other running threads will not get to run to completion.
+                            genmc_ctx.handle_thread_stack_empty(this.active_thread());
+
+                            return interp_ok(Poll::Pending);
+                        }
+
                         // Give background threads a chance to finish by yielding the main thread a
                         // couple of times -- but only if we would also preempt threads randomly.
                         if this.machine.preemption_rate > 0.0 {
                             // There is a non-zero chance they will yield back to us often enough to
                             // make Miri terminate eventually.
-                            if this.machine.concurrency_handler.as_genmc_ref().is_some() {
-                                // TODO GENMC (HACK): in GenMC mode this is not required, but removing it might cause other problems
-                                //                    so we just set it to a low value for now
-                                *self = Yield { remaining: 4 };
-                            } else {
-                                *self = Yield { remaining: MAIN_THREAD_YIELDS_AT_SHUTDOWN };
-                            }
+                            *self = Yield { remaining: MAIN_THREAD_YIELDS_AT_SHUTDOWN };
                         } else {
                             // The other threads did not get preempted, so no need to yield back to
                             // them.

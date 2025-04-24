@@ -189,6 +189,10 @@ impl GenmcCtx {
         unreachable!()
     }
 
+    pub(crate) fn handle_thread_stack_empty(&self, _thread_id: ThreadId) {
+        unreachable!()
+    }
+
     pub(crate) fn handle_thread_finish<'tcx>(
         &self,
         _threads: &ThreadManager<'tcx>,
@@ -197,10 +201,6 @@ impl GenmcCtx {
     }
 
     /**** Scheduling functionality ****/
-
-    pub(crate) fn thread_stack_empty(&self, _thread_id: ThreadId) {
-        unreachable!()
-    }
 
     pub(crate) fn should_preempt(&self) -> bool {
         unreachable!()

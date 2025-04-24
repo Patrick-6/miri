@@ -211,6 +211,10 @@ impl GenmcCtx {
         todo!()
     }
 
+    pub(crate) fn handle_thread_stack_empty(&self, _thread_id: ThreadId) {
+        todo!()
+    }
+
     pub(crate) fn handle_thread_finish<'tcx>(
         &self,
         threads: &ThreadManager<'tcx>,
