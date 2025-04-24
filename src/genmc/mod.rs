@@ -10,7 +10,8 @@ use self::helper::{
 use self::thread_info_manager::{GenmcThreadId, GenmcThreadIdInner, ThreadInfoManager};
 use crate::intrinsics::AtomicOp;
 use crate::{
-    AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, MemoryKind, MiriConfig, MiriMachine, Scalar, TerminationInfo, ThreadId, ThreadManager
+    AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, MemoryKind, MiriConfig,
+    MiriMachine, Scalar, TerminationInfo, ThreadId, ThreadManager, VisitProvenance, VisitWith,
 };
 
 mod config;
@@ -30,7 +31,7 @@ pub struct GenmcCtx {
 
 impl GenmcCtx {
     /// Validate the selected configuration options and create a new `GenmcCtx` if successful
-    /// 
+    ///
     /// Some combinations of options are not allowed:
     /// - Aliasing model checking is incompatible with GenMC mode
     ///   - The reason is that the required information is lost when pointers are send to GenMC and back
@@ -244,6 +245,12 @@ impl GenmcCtx {
         condition: bool,
     ) -> InterpResult<'tcx, ()> {
         if condition { interp_ok(()) } else { self.handle_user_block(machine) }
+    }
+}
+
+impl VisitProvenance for GenmcCtx {
+    fn visit_provenance(&self, _visit: &mut VisitWith<'_>) {
+        // We don't have any tags.
     }
 }
 

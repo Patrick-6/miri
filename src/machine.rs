@@ -481,12 +481,7 @@ impl VisitProvenance for ConcurrencyHandler {
         match self {
             ConcurrencyHandler::None => {}
             ConcurrencyHandler::DataRace(data_race) => data_race.visit_provenance(visit),
-            ConcurrencyHandler::GenMC(_genmc_ctx) => {
-                // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
-                tracing::info!(
-                    "GenMC: TODO GENMC: visit_provenance called on GenmcCtx, check if anything needs to be done here"
-                );
-            }
+            ConcurrencyHandler::GenMC(genmc_ctx) => genmc_ctx.visit_provenance(visit),
         }
     }
 }

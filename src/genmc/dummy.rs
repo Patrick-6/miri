@@ -4,7 +4,7 @@ use rustc_const_eval::interpret::{InterpCx, InterpResult};
 use crate::intrinsics::AtomicOp;
 use crate::{
     AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, MemoryKind, MiriConfig,
-    MiriMachine, Scalar, ThreadId, ThreadManager,
+    MiriMachine, Scalar, ThreadId, ThreadManager, VisitProvenance, VisitWith,
 };
 
 #[derive(Debug)]
@@ -221,6 +221,12 @@ impl GenmcCtx {
         _machine: &MiriMachine<'tcx>,
         _condition: bool,
     ) -> InterpResult<'tcx, ()> {
+        unreachable!()
+    }
+}
+
+impl VisitProvenance for GenmcCtx {
+    fn visit_provenance(&self, _visit: &mut VisitWith<'_>) {
         unreachable!()
     }
 }
