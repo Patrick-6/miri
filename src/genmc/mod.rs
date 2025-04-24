@@ -19,24 +19,15 @@ mod config;
 pub use self::config::GenmcConfig;
 pub use self::ffi::GenmcParams;
 
+// TODO: add fields
 pub struct GenmcCtx {
-    // /// The handle to the GenMC model checker.
-    // /// Invariant: The UniquePtr is never `null`
-    // handle: RefCell<UniquePtr<MiriGenMCShim>>,
     /// Some actions Miri does are allowed to cause data races.
     /// GenMC will not be informed about certain actions (e.g. non-atomic loads) when this flag is set
     allow_data_races: Cell<bool>,
-    // TODO: add fields
 }
 
 impl GenmcCtx {
     /// Validate the selected configuration options and create a new `GenmcCtx` if successful
-    ///
-    /// Some combinations of options are not allowed:
-    /// - Aliasing model checking is incompatible with GenMC mode
-    ///   - The reason is that the required information is lost when pointers are send to GenMC and back
-    /// - Data race checking and weak memory emulation must be turned off, since GenMC does this by itself
-    /// - "Many seeds" mode in Miri is currently incompatible with GenMC mode
     pub fn try_new(_miri_config: &MiriConfig) -> Option<Self> {
         todo!()
     }
