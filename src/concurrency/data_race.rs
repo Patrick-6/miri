@@ -922,8 +922,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
                     },
                 )
             }
-            ConcurrencyHandler::GenMC(genmc_ctx) =>
-                genmc_ctx.atomic_fence(&this.machine, atomic),
+            ConcurrencyHandler::GenMC(genmc_ctx) => genmc_ctx.atomic_fence(&this.machine, atomic),
         }
     }
 
@@ -934,13 +933,10 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         assert!(this.have_all_terminated());
         match &this.machine.concurrency_handler {
             ConcurrencyHandler::None => {}
-            ConcurrencyHandler::DataRace(data_race) => {
-                let old = data_race.ongoing_action_data_race_free.replace(true);
-                assert!(!old, "cannot nest allow_data_races");
-            }
-            ConcurrencyHandler::GenMC(genmc_ctx) => {
-                genmc_ctx.set_ongoing_action_data_race_free(true);
-            }
+            ConcurrencyHandler::DataRace(data_race) =>
+                data_race.set_ongoing_action_data_race_free(true),
+            ConcurrencyHandler::GenMC(genmc_ctx) =>
+                genmc_ctx.set_ongoing_action_data_race_free(true),
         }
     }
 

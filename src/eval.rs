@@ -489,20 +489,12 @@ pub fn eval_entry<'tcx>(
     // (but that "error" might be just "regular program termination").
     let Err(err) = res.report_err();
 
-    if ecx.machine.concurrency_handler.as_genmc_ref().is_some() {
-        tracing::info!("GenMC: execution returned error: {err:?}");
-        match err.kind() {
-            InterpErrorKind::MachineStop(reason) => {
-                if let Some(TerminationInfo::GenmcStuckExecution) =
-                    reason.downcast_ref::<TerminationInfo>()
-                {
-                    // TODO GENMC: maybe emit a warning here?
-                    tracing::info!("GenMC: found stuck execution, not reporting this as an error");
-                    return Some(0);
-                }
-            }
-            _ => {}
-        }
+    if ecx.machine.concurrency_handler.as_genmc_ref().is_some()
+        && let InterpErrorKind::MachineStop(reason) = err.kind()
+        && let Some(TerminationInfo::GenmcStuckExecution) = reason.downcast_ref::<TerminationInfo>()
+    {
+        tracing::info!("GenMC: found stuck execution");
+        return Some(0);
     }
 
     // Show diagnostic, if any.
@@ -520,13 +512,12 @@ pub fn eval_entry<'tcx>(
         EnvVars::cleanup(&mut ecx).expect("error during env var cleanup");
     }
 
-    // TODO GENMC: is this the correct place to put this?
-    if let Some(genmc_ctx) = ecx.machine.concurrency_handler.as_genmc_ref() {
-        // TODO GENMC: proper error handling: how to correctly report an error here?
-        if let Err(error) = genmc_ctx.handle_execution_end(&ecx.machine.threads, &ecx) {
-            tcx.dcx().err(format!("GenMC returned an error: \"{error}\""));
-            return None;
-        }
+    // FIXME: is this the correct place to put this? Should this go into `on_main_stack_empty`?
+    if let Some(genmc_ctx) = ecx.machine.concurrency_handler.as_genmc_ref()
+        && let Err(error) = genmc_ctx.handle_execution_end(&ecx.machine.threads, &ecx)
+    {
+        tcx.dcx().err(format!("GenMC returned an error: \"{error}\""));
+        return None;
     }
 
     // Possibly check for memory leaks.

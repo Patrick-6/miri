@@ -438,14 +438,12 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
                     let condition = this.read_scalar(condition)?.to_bool()?;
                     genmc_ctx.handle_verifier_assume(&this.machine, condition)?;
                 } else {
-                    // TODO GENMC: what to do in this case?
+                    // FIXME (GENMC): what to do in this case?
                     tracing::warn!(
                         "GenMC: function `miri_genmc_verifier_assume` used, but GenMC mode is not active, skip ..."
                     );
                 }
             }
-
-            // TODO GENMC: add other genmc functions
 
             /*** /\ GENMC VERIFIER CALLS /\ ****/
             // Aborting the process.

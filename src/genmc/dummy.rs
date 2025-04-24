@@ -170,11 +170,11 @@ impl GenmcCtx {
         unreachable!()
     }
 
-    pub(crate) fn handle_thread_join(
+    pub(crate) fn handle_thread_join<'tcx>(
         &self,
         _active_thread_id: ThreadId,
         _child_thread_id: ThreadId,
-    ) -> Result<(), ()> {
+    ) -> InterpResult<'tcx, ()> {
         unreachable!()
     }
 

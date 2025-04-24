@@ -72,7 +72,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         init_once.status = InitOnceStatus::Complete;
 
         // Each complete happens-before the end of the wait
-        // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
         if let Some(data_race) = this.machine.concurrency_handler.as_data_race_ref() {
             data_race
                 .release_clock(&this.machine.threads, |clock| init_once.clock.clone_from(clock));
@@ -100,7 +99,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         init_once.status = InitOnceStatus::Uninitialized;
 
         // Each complete happens-before the end of the wait
-        // TODO GENMC: what needs to be done here for GenMC (if anything at all)?
         if let Some(data_race) = this.machine.concurrency_handler.as_data_race_ref() {
             data_race
                 .release_clock(&this.machine.threads, |clock| init_once.clock.clone_from(clock));

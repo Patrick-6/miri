@@ -198,11 +198,11 @@ impl GenmcCtx {
         todo!()
     }
 
-    pub(crate) fn handle_thread_join(
+    pub(crate) fn handle_thread_join<'tcx>(
         &self,
         active_thread_id: ThreadId,
         child_thread_id: ThreadId,
-    ) -> Result<(), ()> {
+    ) -> InterpResult<'tcx, ()> {
         assert!(!self.allow_data_races.get());
         todo!()
     }
@@ -222,7 +222,7 @@ impl GenmcCtx {
     /**** Scheduling functionality ****/
 
     pub(crate) fn should_preempt(&self) -> bool {
-        true // TODO GENMC
+        true
     }
 
     pub(crate) fn schedule_thread<'tcx>(
