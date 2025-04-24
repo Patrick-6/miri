@@ -431,21 +431,6 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 }
             }
 
-            /*** \/ GENMC VERIFIER CALLS \/ ****/
-            "miri_genmc_verifier_assume" => {
-                let [condition] = this.check_shim(abi, Conv::Rust, link_name, args)?;
-                if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-                    let condition = this.read_scalar(condition)?.to_bool()?;
-                    genmc_ctx.handle_verifier_assume(&this.machine, condition)?;
-                } else {
-                    // FIXME (GENMC): what to do in this case?
-                    tracing::warn!(
-                        "GenMC: function `miri_genmc_verifier_assume` used, but GenMC mode is not active, skip ..."
-                    );
-                }
-            }
-
-            /*** /\ GENMC VERIFIER CALLS /\ ****/
             // Aborting the process.
             "exit" => {
                 let [code] = this.check_shim(abi, Conv::C, link_name, args)?;

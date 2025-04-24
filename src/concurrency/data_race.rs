@@ -698,12 +698,16 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         // the *value* (including the associated provenance if this is an AtomicPtr) at this location.
         // Only metadata on the location itself is used.
 
-        // Inform GenMC about the atomic load.
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-            let address = place.ptr().addr();
-            // FIXME: pass what value would be loaded if we did a non-atomic load here, to support mixed atomics/non-atomics:
+            // FIXME: pass the value that would be returned if we did a non-atomic load here, to support mixed atomics/non-atomics:
             let old_val = None;
-            return genmc_ctx.atomic_load(this, address, place.layout.size, atomic, old_val);
+            return genmc_ctx.atomic_load(
+                this,
+                place.ptr().addr(),
+                place.layout.size,
+                atomic,
+                old_val,
+            );
         }
 
         let scalar = this.allow_data_races_ref(move |this| this.read_scalar(place))?;
@@ -728,15 +732,14 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         // This is also a very special exception where we just ignore an error -- if this read
         // was UB e.g. because the memory is uninitialized, we don't want to know!
 
-        let old_val = this.run_for_validation_mut(|this| this.read_scalar(dest)).discard_err();
+        let old_val: Option<interpret::Scalar<crate::Provenance>> =
+            this.run_for_validation_mut(|this| this.read_scalar(dest)).discard_err();
         this.allow_data_races_mut(move |this| this.write_scalar(val, dest))?;
         this.validate_atomic_store(dest, atomic)?;
 
         // Inform GenMC about the atomic store.
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-            let address = dest.ptr().addr();
-            let size = dest.layout.size;
-            genmc_ctx.atomic_store(this, address, size, val, atomic)?;
+            genmc_ctx.atomic_store(this, dest.ptr().addr(), dest.layout.size, val, atomic)?;
         }
 
         this.buffered_atomic_write(val, dest, atomic, old_val)
@@ -878,51 +881,11 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
     /// Update the data-race detector for an atomic fence on the current thread.
     fn atomic_fence(&mut self, atomic: AtomicFenceOrd) -> InterpResult<'tcx> {
         let this = self.eval_context_mut();
-        let current_span = this.machine.current_span();
+        let machine = &this.machine;
         match &this.machine.concurrency_handler {
             ConcurrencyHandler::None => interp_ok(()),
-            ConcurrencyHandler::DataRace(data_race) => {
-                data_race.maybe_perform_sync_operation(
-                    &this.machine.threads,
-                    current_span,
-                    |index, mut clocks| {
-                        trace!("Atomic fence on {:?} with ordering {:?}", index, atomic);
-
-                        // Apply data-race detection for the current fences
-                        // this treats AcqRel and SeqCst as the same as an acquire
-                        // and release fence applied in the same timestamp.
-                        if atomic != AtomicFenceOrd::Release {
-                            // Either Acquire | AcqRel | SeqCst
-                            clocks.apply_acquire_fence();
-                        }
-                        if atomic == AtomicFenceOrd::SeqCst {
-                            // Behave like an RMW on the global fence location. This takes full care of
-                            // all the SC fence requirements, including C++17 §32.4 [atomics.order]
-                            // paragraph 6 (which would limit what future reads can see). It also rules
-                            // out many legal behaviors, but we don't currently have a model that would
-                            // be more precise.
-                            // Also see the second bullet on page 10 of
-                            // <https://www.cs.tau.ac.il/~orilahav/papers/popl21_robustness.pdf>.
-                            let mut sc_fence_clock = data_race.last_sc_fence.borrow_mut();
-                            sc_fence_clock.join(&clocks.clock);
-                            clocks.clock.join(&sc_fence_clock);
-                            // Also establish some sort of order with the last SC write that happened, globally
-                            // (but this is only respected by future reads).
-                            clocks.write_seqcst.join(&data_race.last_sc_write_per_thread.borrow());
-                        }
-                        // The release fence is last, since both of the above could alter our clock,
-                        // which should be part of what is being released.
-                        if atomic != AtomicFenceOrd::Acquire {
-                            // Either Release | AcqRel | SeqCst
-                            clocks.apply_release_fence();
-                        }
-
-                        // Increment timestamp in case of release semantics.
-                        interp_ok(atomic != AtomicFenceOrd::Acquire)
-                    },
-                )
-            }
-            ConcurrencyHandler::GenMC(genmc_ctx) => genmc_ctx.atomic_fence(&this.machine, atomic),
+            ConcurrencyHandler::DataRace(data_race) => data_race.atomic_fence(machine, atomic),
+            ConcurrencyHandler::GenMC(genmc_ctx) => genmc_ctx.atomic_fence(machine, atomic),
         }
     }
 
@@ -1505,76 +1468,73 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
     ) -> InterpResult<'tcx> {
         let this = self.eval_context_ref();
         assert!(access.is_atomic());
-        match &this.machine.concurrency_handler {
-            ConcurrencyHandler::None => interp_ok(()),
-            ConcurrencyHandler::DataRace(data_race) => {
-                if !data_race.race_detecting() {
-                    return interp_ok(());
-                }
-                let size = place.layout.size;
-                let (alloc_id, base_offset, _prov) = this.ptr_get_alloc_id(place.ptr(), 0)?;
-                // Load and log the atomic operation.
-                // Note that atomic loads are possible even from read-only allocations, so `get_alloc_extra_mut` is not an option.
-                let alloc_meta = this.get_alloc_extra(alloc_id)?.data_race.as_ref().unwrap();
-                trace!(
-                    "Atomic op({}) with ordering {:?} on {:?} (size={})",
-                    access.description(None, None),
-                    &atomic,
-                    place.ptr(),
-                    size.bytes()
-                );
+        let data_race = match &this.machine.concurrency_handler {
+            ConcurrencyHandler::None => return interp_ok(()),
+            ConcurrencyHandler::DataRace(data_race) => data_race,
+            ConcurrencyHandler::GenMC(_genmc_ctx) => return interp_ok(()),
+        };
 
-                let current_span = this.machine.current_span();
-                // Perform the atomic operation.
-                data_race.maybe_perform_sync_operation(
-                    &this.machine.threads,
-                    current_span,
-                    |index, mut thread_clocks| {
-                        for (mem_clocks_range, mem_clocks) in
-                            alloc_meta.alloc_ranges.borrow_mut().iter_mut(base_offset, size)
-                        {
-                            if let Err(DataRace) = op(mem_clocks, &mut thread_clocks, index, atomic)
-                            {
-                                mem::drop(thread_clocks);
-                                return VClockAlloc::report_data_race(
-                                    data_race,
-                                    &this.machine.threads,
-                                    mem_clocks,
-                                    access,
-                                    place.layout.size,
-                                    interpret::Pointer::new(
-                                        alloc_id,
-                                        Size::from_bytes(mem_clocks_range.start),
-                                    ),
-                                    None,
-                                )
-                                .map(|_| true);
-                            }
-                        }
+        if !data_race.race_detecting() {
+            return interp_ok(());
+        }
+        let size = place.layout.size;
+        let (alloc_id, base_offset, _prov) = this.ptr_get_alloc_id(place.ptr(), 0)?;
+        // Load and log the atomic operation.
+        // Note that atomic loads are possible even from read-only allocations, so `get_alloc_extra_mut` is not an option.
+        let alloc_meta = this.get_alloc_extra(alloc_id)?.data_race.as_ref().unwrap();
+        trace!(
+            "Atomic op({}) with ordering {:?} on {:?} (size={})",
+            access.description(None, None),
+            &atomic,
+            place.ptr(),
+            size.bytes()
+        );
 
-                        // This conservatively assumes all operations have release semantics
-                        interp_ok(true)
-                    },
-                )?;
-
-                // Log changes to atomic memory.
-                if tracing::enabled!(tracing::Level::TRACE) {
-                    for (_offset, mem_clocks) in
-                        alloc_meta.alloc_ranges.borrow().iter(base_offset, size)
-                    {
-                        trace!(
-                            "Updated atomic memory({:?}, size={}) to {:#?}",
-                            place.ptr(),
-                            size.bytes(),
-                            mem_clocks.atomic_ops
-                        );
+        let current_span = this.machine.current_span();
+        // Perform the atomic operation.
+        data_race.maybe_perform_sync_operation(
+            &this.machine.threads,
+            current_span,
+            |index, mut thread_clocks| {
+                for (mem_clocks_range, mem_clocks) in
+                    alloc_meta.alloc_ranges.borrow_mut().iter_mut(base_offset, size)
+                {
+                    if let Err(DataRace) = op(mem_clocks, &mut thread_clocks, index, atomic) {
+                        mem::drop(thread_clocks);
+                        return VClockAlloc::report_data_race(
+                            data_race,
+                            &this.machine.threads,
+                            mem_clocks,
+                            access,
+                            place.layout.size,
+                            interpret::Pointer::new(
+                                alloc_id,
+                                Size::from_bytes(mem_clocks_range.start),
+                            ),
+                            None,
+                        )
+                        .map(|_| true);
                     }
                 }
 
-                interp_ok(())
+                // This conservatively assumes all operations have release semantics
+                interp_ok(true)
+            },
+        )?;
+
+        // Log changes to atomic memory.
+        if tracing::enabled!(tracing::Level::TRACE) {
+            for (_offset, mem_clocks) in alloc_meta.alloc_ranges.borrow().iter(base_offset, size) {
+                trace!(
+                    "Updated atomic memory({:?}, size={}) to {:#?}",
+                    place.ptr(),
+                    size.bytes(),
+                    mem_clocks.atomic_ops
+                );
             }
-            ConcurrencyHandler::GenMC(_genmc_ctx) => interp_ok(()),
         }
+
+        interp_ok(())
     }
 }
 
@@ -1784,6 +1744,50 @@ impl GlobalState {
         // Add this thread's clock index as a candidate for re-use.
         let reuse = self.reuse_candidates.get_mut();
         reuse.insert(current_index);
+    }
+
+    /// Update the data-race detector for an atomic fence on the current thread.
+    fn atomic_fence<'tcx>(
+        &self,
+        machine: &MiriMachine<'tcx>,
+        atomic: AtomicFenceOrd,
+    ) -> InterpResult<'tcx> {
+        let current_span = machine.current_span();
+        self.maybe_perform_sync_operation(&machine.threads, current_span, |index, mut clocks| {
+            trace!("Atomic fence on {:?} with ordering {:?}", index, atomic);
+
+            // Apply data-race detection for the current fences
+            // this treats AcqRel and SeqCst as the same as an acquire
+            // and release fence applied in the same timestamp.
+            if atomic != AtomicFenceOrd::Release {
+                // Either Acquire | AcqRel | SeqCst
+                clocks.apply_acquire_fence();
+            }
+            if atomic == AtomicFenceOrd::SeqCst {
+                // Behave like an RMW on the global fence location. This takes full care of
+                // all the SC fence requirements, including C++17 §32.4 [atomics.order]
+                // paragraph 6 (which would limit what future reads can see). It also rules
+                // out many legal behaviors, but we don't currently have a model that would
+                // be more precise.
+                // Also see the second bullet on page 10 of
+                // <https://www.cs.tau.ac.il/~orilahav/papers/popl21_robustness.pdf>.
+                let mut sc_fence_clock = self.last_sc_fence.borrow_mut();
+                sc_fence_clock.join(&clocks.clock);
+                clocks.clock.join(&sc_fence_clock);
+                // Also establish some sort of order with the last SC write that happened, globally
+                // (but this is only respected by future reads).
+                clocks.write_seqcst.join(&self.last_sc_write_per_thread.borrow());
+            }
+            // The release fence is last, since both of the above could alter our clock,
+            // which should be part of what is being released.
+            if atomic != AtomicFenceOrd::Acquire {
+                // Either Release | AcqRel | SeqCst
+                clocks.apply_release_fence();
+            }
+
+            // Increment timestamp in case of release semantics.
+            interp_ok(atomic != AtomicFenceOrd::Acquire)
+        })
     }
 
     /// Attempt to perform a synchronized operation, this

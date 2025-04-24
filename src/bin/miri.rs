@@ -182,7 +182,6 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
 
         if let Some(_genmc_config) = &config.genmc_config {
             let _genmc_ctx = Rc::new(GenmcCtx::try_new(&config).unwrap_or_else(|| {
-                // FIXME: provide a better error message
                 tcx.dcx().fatal("Cannot create GenMC context");
             }));
 
@@ -191,7 +190,6 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
         };
 
         if let Some(many_seeds) = self.many_seeds.take() {
-            assert!(config.genmc_config.is_none());
             assert!(config.seed.is_none());
             let exit_code = sync::IntoDynSyncSend(AtomicI32::new(rustc_driver::EXIT_SUCCESS));
             let num_failed = sync::IntoDynSyncSend(AtomicU32::new(0));

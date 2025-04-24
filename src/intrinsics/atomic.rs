@@ -163,8 +163,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
     ) -> InterpResult<'tcx> {
         let [] = check_intrinsic_arg_count(args)?;
         let _ = atomic;
-        // FIXME: compiler fences are currently ignored
-        // FIXME: (also ignored in GenMC mode)
+        // FIXME: compiler fences are currently ignored (also ignored in GenMC mode)
         interp_ok(())
     }
 
@@ -205,37 +204,32 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
 
         // Inform GenMC about the atomic rmw operation.
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-            let address = place.ptr().addr();
-            let size = place.layout.size;
-            let rhs_scalar = rhs.to_scalar();
             let is_unsigned = matches!(rhs.layout.ty.kind(), ty::Uint(_));
             let (old, _is_success) = genmc_ctx.atomic_rmw_op(
                 this,
-                address,
-                size,
+                place.ptr().addr(),
+                place.layout.size,
                 atomic,
                 atomic_op,
-                rhs_scalar,
+                rhs.to_scalar(),
                 is_unsigned,
             )?;
-            this.write_scalar(old, dest)?; // old value is returned
-        } else {
-            match atomic_op {
-                AtomicOp::Min => {
-                    let old = this.atomic_min_max_scalar(&place, rhs, true, atomic)?;
-                    this.write_immediate(*old, dest)?; // old value is returned
-                }
-                AtomicOp::Max => {
-                    let old = this.atomic_min_max_scalar(&place, rhs, false, atomic)?;
-                    this.write_immediate(*old, dest)?; // old value is returned
-                }
-                AtomicOp::MirOp(op, not) => {
-                    let old = this.atomic_rmw_op_immediate(&place, &rhs, op, not, atomic)?;
-                    this.write_immediate(*old, dest)?; // old value is returned
-                }
+            return this.write_scalar(old, dest); // old value is returned
+        }
+        match atomic_op {
+            AtomicOp::Min => {
+                let old = this.atomic_min_max_scalar(&place, rhs, true, atomic)?;
+                this.write_immediate(*old, dest) // old value is returned
+            }
+            AtomicOp::Max => {
+                let old = this.atomic_min_max_scalar(&place, rhs, false, atomic)?;
+                this.write_immediate(*old, dest) // old value is returned
+            }
+            AtomicOp::MirOp(op, not) => {
+                let old = this.atomic_rmw_op_immediate(&place, &rhs, op, not, atomic)?;
+                this.write_immediate(*old, dest) // old value is returned
             }
         }
-        interp_ok(())
     }
 
     fn atomic_exchange(
@@ -250,9 +244,6 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
         let place = this.deref_pointer(place)?;
         let new = this.read_scalar(new)?;
 
-        let old = this.atomic_exchange_scalar(&place, new, atomic)?;
-        this.write_scalar(old, dest)?; // old value is returned
-
         // Inform GenMC about the atomic atomic exchange.
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
             let (old, _is_success) = genmc_ctx.atomic_exchange(
@@ -262,10 +253,11 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
                 new,
                 atomic,
             )?;
-            this.write_scalar(old, dest)?; // old value is returned
+            return this.write_scalar(old, dest); // old value is returned
         }
 
-        interp_ok(())
+        let old = this.atomic_exchange_scalar(&place, new, atomic)?;
+        this.write_scalar(old, dest) // old value is returned
     }
 
     fn atomic_compare_exchange_impl(
@@ -284,13 +276,11 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
 
         // Inform GenMC about the atomic atomic compare exchange.
         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-            let address = place.ptr().addr();
-            let size = place.layout.size;
             let expect_old_scalar = this.read_scalar(expect_old)?;
             let (old, cmpxchg_success) = genmc_ctx.atomic_compare_exchange(
                 this,
-                address,
-                size,
+                place.ptr().addr(),
+                place.layout.size,
                 expect_old_scalar,
                 new,
                 success,
@@ -300,10 +290,7 @@ trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
 
             let old = Immediate::ScalarPair(old, Scalar::from_bool(cmpxchg_success));
 
-            // Return old value.
-            this.write_immediate(old, dest)?;
-
-            return interp_ok(());
+            return this.write_immediate(old, dest); // Return old value.
         }
 
         let expect_old = this.read_immediate(expect_old)?; // read as immediate for the sake of `binary_op()`

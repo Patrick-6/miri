@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use rustc_abi::{Align, Size};
 use rustc_const_eval::interpret::{InterpCx, InterpResult};
 
@@ -12,8 +14,6 @@ pub struct GenmcCtx {}
 
 #[derive(Debug, Default, Clone)]
 pub struct GenmcConfig {}
-
-// TODO GENMC: add all exposed methods here too
 
 impl GenmcCtx {
     pub fn try_new(_miri_config: &MiriConfig) -> Option<Self> {

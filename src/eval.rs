@@ -165,7 +165,7 @@ pub struct MiriConfig {
     pub address_reuse_rate: f64,
     /// Probability for address reuse across threads.
     pub address_reuse_cross_thread_rate: f64,
-    /// Settings for using GenMC with Miri (if enabled). Default: None
+    /// Settings for using GenMC with Miri
     pub genmc_config: Option<GenmcConfig>,
 }
 
@@ -236,12 +236,9 @@ impl<'tcx> MainThreadState<'tcx> {
                     Poll::Pending => {} // just keep going
                     Poll::Ready(()) => {
                         if let Some(genmc_ctx) = this.machine.concurrency_handler.as_genmc_ref() {
-                            // We don't need to yield in GenMC mode, this will be handled by the GenmcCtx
-                            *self = Done;
-
-                            // FIXME: This may be considered a HACK: we need to inform the GenmcCtx that the main thread is done.
-                            // If we let the main thread end here, then any other running threads will not get to run to completion.
+                            // In GenMC mode, we don't yield, instead we inform the GenmcCtx that the main thread is done, which will then handle it.
                             genmc_ctx.handle_thread_stack_empty(this.active_thread());
+                            *self = Done;
 
                             return interp_ok(Poll::Pending);
                         }
@@ -489,6 +486,7 @@ pub fn eval_entry<'tcx>(
     // (but that "error" might be just "regular program termination").
     let Err(err) = res.report_err();
 
+    // In GenMC mode, an execution can get stuck, but there may still be other executions to explore, so we don't report an error for that.
     if ecx.machine.concurrency_handler.as_genmc_ref().is_some()
         && let InterpErrorKind::MachineStop(reason) = err.kind()
         && let Some(TerminationInfo::GenmcStuckExecution) = reason.downcast_ref::<TerminationInfo>()

@@ -3,7 +3,6 @@
 mod atomic;
 mod simd;
 
-// FIXME GENMC: is this ok to be pub?
 pub use self::atomic::AtomicOp;
 
 use rand::Rng;
