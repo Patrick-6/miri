@@ -31,7 +31,7 @@ use rustc_target::callconv::FnAbi;
 use crate::alloc_addresses::EvalContextExt;
 use crate::concurrency::cpu_affinity::{self, CpuAffinityMask};
 use crate::concurrency::data_race::{self, NaReadType, NaWriteType};
-use crate::concurrency::{weak_memory, ConcurrencyHandler};
+use crate::concurrency::{ConcurrencyHandler, weak_memory};
 use crate::genmc::GenmcCtx;
 use crate::*;
 
@@ -868,15 +868,7 @@ impl<'tcx> MiriMachine<'tcx> {
                     kind,
                     ecx.machine.current_span(),
                 )),
-            ConcurrencyHandler::GenMC(genmc_ctx) => {
-                info!(
-                    "GenMC: TODO GENMC: init_allocation: check if something needs to be done here for GenMC"
-                );
-                let _ = genmc_ctx;
-                // let address = todo!();
-                genmc_ctx.init_allocation(&ecx.machine, size, align, kind);
-                None
-            }
+            ConcurrencyHandler::GenMC(_genmc_ctx) => None,
         };
         let weak_memory = ecx.machine.weak_memory.then(weak_memory::AllocState::new_allocation);
 

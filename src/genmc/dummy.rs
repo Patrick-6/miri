@@ -149,17 +149,6 @@ impl GenmcCtx {
         unreachable!()
     }
 
-    pub(crate) fn init_allocation<'tcx>(
-        &self,
-        _machine: &MiriMachine<'tcx>,
-        // address: Size,
-        _size: Size,
-        _align: Align,
-        _kind: MemoryKind,
-    ) {
-        unreachable!()
-    }
-
     pub(crate) fn handle_dealloc<'tcx>(
         &self,
         _machine: &MiriMachine<'tcx>,

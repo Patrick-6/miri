@@ -1,23 +1,19 @@
-use std::cell::{Cell, RefCell};
+#![allow(unused)] // FIXME: remove this
+
+use std::cell::Cell;
 
 use rustc_abi::{Align, Size};
 use rustc_const_eval::interpret::{InterpCx, InterpResult, interp_ok};
 
-use self::helper::{
-    NextInstrInfo, Threads, genmc_scalar_to_scalar, get_next_instr_info,
-    rhs_scalar_to_genmc_scalar, scalar_to_genmc_scalar,
-};
-use self::thread_info_manager::{GenmcThreadId, GenmcThreadIdInner, ThreadInfoManager};
 use crate::intrinsics::AtomicOp;
 use crate::{
     AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, MemoryKind, MiriConfig,
-    MiriMachine, Scalar, TerminationInfo, ThreadId, ThreadManager, VisitProvenance, VisitWith,
+    MiriMachine, Scalar, ThreadId, ThreadManager, VisitProvenance, VisitWith,
 };
 
 mod config;
 
 pub use self::config::GenmcConfig;
-pub use self::ffi::GenmcParams;
 
 // TODO: add fields
 pub struct GenmcCtx {
@@ -34,7 +30,7 @@ impl GenmcCtx {
     ///   - The reason is that the required information is lost when pointers are send to GenMC and back
     /// - Data race checking and weak memory emulation must be turned off, since GenMC does this by itself
     /// - "Many seeds" mode in Miri is currently incompatible with GenMC mode
-    pub fn try_new(_miri_config: &MiriConfig) -> Option<Self> {
+    pub fn try_new(miri_config: &MiriConfig) -> Option<Self> {
         todo!()
     }
 
@@ -56,8 +52,8 @@ impl GenmcCtx {
 
     pub(crate) fn handle_execution_end<'tcx>(
         &self,
-        _thread_manager: &ThreadManager<'tcx>,
-        _ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
+        thread_manager: &ThreadManager<'tcx>,
+        ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
     ) -> Result<(), String> {
         todo!()
     }
@@ -78,11 +74,11 @@ impl GenmcCtx {
 
     pub(crate) fn atomic_load<'tcx>(
         &self,
-        _ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
-        _address: Size,
-        _size: Size,
-        _ordering: AtomicReadOrd,
-        _old_val: Option<Scalar>,
+        ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
+        address: Size,
+        size: Size,
+        ordering: AtomicReadOrd,
+        old_val: Option<Scalar>,
     ) -> InterpResult<'tcx, Scalar> {
         assert!(!self.allow_data_races.get());
         todo!()
@@ -90,11 +86,11 @@ impl GenmcCtx {
 
     pub(crate) fn atomic_store<'tcx>(
         &self,
-        _ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
-        _address: Size,
-        _size: Size,
-        _value: Scalar,
-        _ordering: AtomicWriteOrd,
+        ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
+        address: Size,
+        size: Size,
+        value: Scalar,
+        ordering: AtomicWriteOrd,
     ) -> InterpResult<'tcx, ()> {
         assert!(!self.allow_data_races.get());
         todo!()
@@ -211,7 +207,7 @@ impl GenmcCtx {
         todo!()
     }
 
-    pub(crate) fn handle_thread_stack_empty(&self, _thread_id: ThreadId) {
+    pub(crate) fn handle_thread_stack_empty(&self, thread_id: ThreadId) {
         todo!()
     }
 

@@ -14,4 +14,4 @@ rustc-ice*.txt
 tests/native-lib/libtestlib.so
 .auto-*
 
-genmc/
+./genmc/
