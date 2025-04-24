@@ -54,8 +54,8 @@ use rustc_span::Span;
 
 use super::vector_clock::{VClock, VTimestamp, VectorIdx};
 use super::weak_memory::EvalContextExt as _;
+use crate::concurrency::ConcurrencyHandler;
 use crate::diagnostics::RacingOp;
-use crate::machine::ConcurrencyHandler;
 use crate::*;
 
 pub type AllocState = VClockAlloc;
@@ -880,8 +880,8 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         let this = self.eval_context_mut();
         let current_span = this.machine.current_span();
         match &this.machine.concurrency_handler {
-            machine::ConcurrencyHandler::None => interp_ok(()),
-            machine::ConcurrencyHandler::DataRace(data_race) => {
+            ConcurrencyHandler::None => interp_ok(()),
+            ConcurrencyHandler::DataRace(data_race) => {
                 data_race.maybe_perform_sync_operation(
                     &this.machine.threads,
                     current_span,
@@ -922,7 +922,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
                     },
                 )
             }
-            machine::ConcurrencyHandler::GenMC(genmc_ctx) =>
+            ConcurrencyHandler::GenMC(genmc_ctx) =>
                 genmc_ctx.atomic_fence(&this.machine, atomic),
         }
     }

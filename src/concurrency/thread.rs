@@ -15,7 +15,7 @@ use rustc_middle::mir::Mutability;
 use rustc_middle::ty::layout::TyAndLayout;
 use rustc_span::Span;
 
-use crate::machine::ConcurrencyHandler;
+use crate::concurrency::ConcurrencyHandler;
 use crate::shims::tls;
 use crate::*;
 
