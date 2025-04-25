@@ -68,7 +68,9 @@ fn main() {
     );
     std::env::set_current_dir("../").unwrap();
 
-    cxx_build::bridge("src/concurrency/genmc/mod.rs")
+    let genmc_source_file = "src/concurrency/genmc/mod.rs";
+
+    cxx_build::bridge(genmc_source_file)
         .compiler("g++") // TODO GENMC (BUILD): make sure GenMC uses the same compiler as the cxx_bridge
         .opt_level(opt_level)
         .debug(true)
@@ -106,7 +108,7 @@ fn main() {
     println!("cargo::rustc-link-lib=dl");
     println!("cargo::rustc-link-lib=dylib=LLVM-19");
 
-    println!("cargo:rerun-if-changed=src/genmc/mod.rs");
+    println!("cargo:rerun-if-changed={genmc_source_file}");
 
     // Recursively walk the directory
     let extensions = ["cpp", "cc", "hpp", "h", "c", "am"].map(os_str::OsStr::new);

@@ -43,6 +43,7 @@ const IGNORE_NON_ATOMICS: bool = false;
 const SKIP_DUMMY_INITIALIZATION: bool = false;
 
 // TODO GENMC: maybe make this selectable? Or make a pre-reserved range for these?
+const DO_ZST_SKIP_HACK: bool = false;
 const ZST_ADDRESS_BUFFER_SIZE: usize = 128 * 1024;
 
 const GENMC_MAIN_THREAD_ID: i32 = 0;
@@ -417,12 +418,14 @@ impl GenmcCtx {
         let pinned_mc = mc.as_mut();
         pinned_mc.handleExecutionStart();
 
-        // We pre-allocate space for ZSTs, so GenMC doesn't need to handle them:
-        // TODO GENMC: why is this returning usize? Shouldn't it be u64?
-        let pinned_mc = mc.as_mut();
-        let addr = pinned_mc.handleMalloc(0, ZST_ADDRESS_BUFFER_SIZE, 1);
-        assert_ne!(addr, 0);
-        self.zst_allocation_range.set((addr, 0, ZST_ADDRESS_BUFFER_SIZE));
+        if DO_ZST_SKIP_HACK {
+            // We pre-allocate space for ZSTs, so GenMC doesn't need to handle them:
+            // TODO GENMC: why is this returning usize? Shouldn't it be u64?
+            let pinned_mc = mc.as_mut();
+            let addr = pinned_mc.handleMalloc(0, ZST_ADDRESS_BUFFER_SIZE, 1);
+            assert_ne!(addr, 0);
+            self.zst_allocation_range.set((addr, 0, ZST_ADDRESS_BUFFER_SIZE));
+        }
     }
 
     /// Inform GenMC that the program's execution has ended.
@@ -438,11 +441,13 @@ impl GenmcCtx {
 
         let mut mc = self.handle.borrow_mut();
 
-        // Free the space we reserved for ZSTs so there is no leak reported:
-        let pinned_mc = mc.as_mut();
+        if DO_ZST_SKIP_HACK {
+            // Free the space we reserved for ZSTs so there is no leak reported:
+            let pinned_mc = mc.as_mut();
 
-        let zst_range = self.zst_allocation_range.get();
-        pinned_mc.handleFree(GENMC_MAIN_THREAD_ID, zst_range.0, zst_range.2);
+            let zst_range = self.zst_allocation_range.get();
+            pinned_mc.handleFree(GENMC_MAIN_THREAD_ID, zst_range.0, zst_range.2);
+        }
 
         let pinned_mc = mc.as_mut();
         let result = pinned_mc.handleExecutionEnd(&thread_states);
@@ -818,11 +823,17 @@ impl GenmcCtx {
         alignment: Align,
         memory_kind: MemoryKind,
     ) -> InterpResult<'tcx, u64> {
-        if size.bytes() == 0 {
+        if DO_ZST_SKIP_HACK && size.bytes() == 0 {
+            info!(
+                "GenMC: special handling for ZST allocation with alignment {}",
+                alignment.bytes()
+            );
             // TODO GENMC: skip telling GenMC about ZST alloc:
             let (base_addr, offset, max) = self.zst_allocation_range.get();
             assert!(offset < max);
             let addr = u64::try_from(base_addr + offset + 1).unwrap();
+            // TODO GENMC: this doesn't work for ZSTs with higher alignment requirements
+            assert_eq!(0, addr % alignment.bytes());
             self.zst_allocation_range.set((base_addr, offset + 1, max));
 
             return interp_ok(addr);
@@ -890,7 +901,7 @@ impl GenmcCtx {
         align: Align,
         kind: MemoryKind,
     ) -> InterpResult<'tcx, ()> {
-        if size.bytes() == 0 {
+        if DO_ZST_SKIP_HACK && size.bytes() == 0 {
             // TODO GENMC: skipping ZST dealloc
             return interp_ok(());
         }
