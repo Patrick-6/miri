@@ -94,7 +94,7 @@ impl GenmcCtx {
         _address: Size,
         _size: Size,
         _ordering: AtomicRwOrd,
-        (rmw_op, not): (mir::BinOp, bool),
+        (_rmw_op, _not): (mir::BinOp, bool),
         _rhs_scalar: Scalar,
     ) -> InterpResult<'tcx, (Scalar, Scalar)> {
         unreachable!()
@@ -102,13 +102,13 @@ impl GenmcCtx {
 
     pub(crate) fn atomic_min_max_op<'tcx>(
         &self,
-        ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
-        address: Size,
-        size: Size,
-        ordering: AtomicRwOrd,
-        min: bool,
-        is_signed: bool,
-        rhs_scalar: Scalar,
+        _ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
+        _address: Size,
+        _size: Size,
+        _ordering: AtomicRwOrd,
+        _min: bool,
+        _is_signed: bool,
+        _rhs_scalar: Scalar,
     ) -> InterpResult<'tcx, (Scalar, Scalar)> {
         unreachable!()
     }
@@ -168,17 +168,6 @@ impl GenmcCtx {
         unreachable!()
     }
 
-    pub(crate) fn init_allocation<'tcx>(
-        &self,
-        _machine: &MiriMachine<'tcx>,
-        // address: Size,
-        _size: Size,
-        _align: Align,
-        _kind: MemoryKind,
-    ) {
-        unreachable!()
-    }
-
     pub(crate) fn handle_dealloc<'tcx>(
         &self,
         _machine: &MiriMachine<'tcx>,
@@ -200,11 +189,11 @@ impl GenmcCtx {
         unreachable!()
     }
 
-    pub(crate) fn handle_thread_join(
+    pub(crate) fn handle_thread_join<'tcx>(
         &self,
         _active_thread_id: ThreadId,
         _child_thread_id: ThreadId,
-    ) -> Result<(), ()> {
+    ) -> InterpResult<'tcx, ()> {
         unreachable!()
     }
 
@@ -220,6 +209,10 @@ impl GenmcCtx {
     }
 
     /**** Scheduling functionality ****/
+
+    pub(crate) fn should_preempt(&self) -> bool {
+        unreachable!()
+    }
 
     pub(crate) fn schedule_thread<'tcx>(
         &self,
@@ -250,6 +243,10 @@ impl GenmcConfig {
         unimplemented!(
             "GenMC feature im Miri is disabled, cannot handle argument: \"-Zmiri-genmc{trimmed_arg}\""
         );
+    }
+
+    pub fn disable_data_race_detector(&mut self) {
+        unreachable!()
     }
 
     pub fn should_print_graph(&self, _rep: usize) -> bool {
