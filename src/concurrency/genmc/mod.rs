@@ -1,13 +1,12 @@
 use std::cell::{Cell, RefCell};
 #[allow(unused_imports)] // TODO GENMC: false warning?
 use std::pin::Pin;
+use std::sync::Arc;
 
 #[allow(unused_imports)] // TODO GENMC: false warning?
 use cxx::{CxxString, UniquePtr};
-use rand::prelude::*;
-use rand::rngs::StdRng;
 use rustc_abi::{Align, Size};
-use rustc_const_eval::interpret::{InterpCx, InterpResult, interp_ok};
+use rustc_const_eval::interpret::{AllocId, InterpCx, InterpResult, interp_ok};
 use rustc_middle::{mir, throw_machine_stop, throw_ub_format, throw_unsup_format};
 use tracing::{info, warn};
 
@@ -16,6 +15,7 @@ use self::ffi::{
     GenmcScalar, MemOrdering, MiriGenMCShim, RMWBinOp, StoreEventType, ThreadState,
     ThreadStateInfo, createGenmcHandle,
 };
+use self::global_allocations::{EvalContextExtPriv as _, GlobalAllocationHandler};
 use self::helper::{
     NextInstrInfo, Threads, genmc_scalar_to_scalar, get_next_instr_info,
     rhs_scalar_to_genmc_scalar, scalar_to_genmc_scalar,
@@ -24,11 +24,13 @@ use self::mapping::{min_max_to_genmc_rmw_op, to_genmc_rmw_op};
 use self::thread_info_manager::{GenmcThreadId, GenmcThreadIdInner, ThreadInfoManager};
 use crate::{
     AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, MemoryKind, MiriConfig,
-    MiriMachine, Scalar, TerminationInfo, ThreadId, ThreadManager, VisitProvenance, VisitWith,
+    MiriMachine, MiriMemoryKind, Scalar, TerminationInfo, ThreadId, ThreadManager, VisitProvenance,
+    VisitWith,
 };
 
 mod config;
 mod cxx_extra;
+mod global_allocations;
 mod helper;
 mod mapping;
 mod thread_info_manager;
@@ -47,6 +49,11 @@ const DO_ZST_SKIP_HACK: bool = false;
 const ZST_ADDRESS_BUFFER_SIZE: usize = 128 * 1024;
 
 const GENMC_MAIN_THREAD_ID: i32 = 0;
+
+/// Defined in "genmc/src/Support/SAddr.hpp"
+/// FIXME: currently we use `getGlobalAllocStaticMask()` to ensure the constant is consistent between Miri and GenMC,
+///   but if https://github.com/dtolnay/cxx/issues/1051 is fixed we could share the constant directly.
+const GENMC_GLOBAL_ADDRESSES_MASK: u64 = 1 << 63;
 
 // TODO GENMC: extract the ffi module if possible, to reduce number of required recompilation
 #[cxx::bridge]
@@ -212,6 +219,7 @@ mod ffi {
 
         fn createGenmcHandle(config: &GenmcParams, /* OperatingMode */)
         -> UniquePtr<MiriGenMCShim>;
+        fn getGlobalAllocStaticMask() -> u64;
 
         fn handleExecutionStart(self: Pin<&mut MiriGenMCShim>);
         fn handleExecutionEnd(
@@ -297,9 +305,6 @@ impl GenmcScalar {
 pub struct GenmcCtx {
     handle: RefCell<NonNullUniquePtr<MiriGenMCShim>>,
 
-    #[allow(unused)] // TODO GENMC (CLEANUP)
-    rng: RefCell<StdRng>, // TODO GENMC: temporary rng for handling scheduling
-
     // TODO GENMC (PERFORMANCE): could use one RefCell for all internals instead of multiple
     thread_infos: RefCell<ThreadInfoManager>,
 
@@ -314,6 +319,13 @@ pub struct GenmcCtx {
 
     // TODO GENMC (HACK): we make one large allocation to then use for ZSTs, to reduce the number of events we create for GenMC
     zst_allocation_range: Cell<(usize, usize, usize)>,
+
+    /// Keep track of global allocations, to ensure they keep the same address across different executions, even if the order of allocations changes.
+    /// The `AllocId` for globals is stable across executions, so we can use it as an identifier.
+    global_allocations: Arc<GlobalAllocationHandler>,
+    // TODO GENMC: maybe make this a (base, size), maybe BTreeMap/sorted vector for reverse lookups
+    //          GenMC needs to have access to that
+    // TODO: look at code of "pub struct GlobalStateInner"
 }
 
 /// Convert an address selected by GenMC into Miri's type for addresses.
@@ -349,23 +361,14 @@ impl GenmcCtx {
         let non_null_handle = NonNullUniquePtr::new(handle).expect("GenMC should not return null");
         let non_null_handle = RefCell::new(non_null_handle);
 
-        let seed = 0;
-        let rng = RefCell::new(StdRng::seed_from_u64(seed));
-
-        let thread_infos = RefCell::new(ThreadInfoManager::new());
-        let allow_data_races = Cell::new(false);
-        let stuck_execution_count = Cell::new(0);
-        let curr_thread_user_block = Cell::new(false);
-        let zst_allocation_range = Cell::new((0, 0, 0));
-
         Self {
             handle: non_null_handle,
-            rng,
-            thread_infos,
-            allow_data_races,
-            stuck_execution_count,
-            curr_thread_user_block,
-            zst_allocation_range,
+            thread_infos: Default::default(),
+            allow_data_races: Cell::new(false),
+            stuck_execution_count: Cell::new(0),
+            curr_thread_user_block: Cell::new(false),
+            zst_allocation_range: Cell::new((0, 0, 0)),
+            global_allocations: Default::default(),
         }
     }
 
@@ -699,7 +702,11 @@ impl GenmcCtx {
             info!("GenMC: skipping `handle_load`");
             return interp_ok(());
         }
-        info!("GenMC: received memory_load (non-atomic): address: {address:?}, size: {size:?}",);
+        info!(
+            "GenMC: received memory_load (non-atomic): address: {:#x}, size: {}",
+            address.bytes(),
+            size.bytes()
+        );
         // GenMC doesn't like ZSTs, and they can't have any data races, so we skip them
         if size.bytes() == 0 {
             return interp_ok(());
@@ -818,11 +825,13 @@ impl GenmcCtx {
 
     pub(crate) fn handle_alloc<'tcx>(
         &self,
-        machine: &MiriMachine<'tcx>,
+        ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
+        alloc_id: AllocId,
         size: Size,
         alignment: Align,
         memory_kind: MemoryKind,
     ) -> InterpResult<'tcx, u64> {
+        let machine = &ecx.machine;
         if DO_ZST_SKIP_HACK && size.bytes() == 0 {
             info!(
                 "GenMC: special handling for ZST allocation with alignment {}",
@@ -838,30 +847,32 @@ impl GenmcCtx {
 
             return interp_ok(addr);
         }
-        // eprintln!(
-        //     "handle_alloc ({memory_kind:?}): Custom backtrace: {}",
-        //     std::backtrace::Backtrace::force_capture()
-        // );
-        if self.allow_data_races.get() {
-            // TODO GENMC: handle this properly
-            info!("GenMC: skipping `handle_alloc`");
-            return interp_ok(0);
-        }
-        let thread_infos = self.thread_infos.borrow();
-        let curr_thread = machine.threads.active_thread();
-        let genmc_tid = thread_infos.get_info(curr_thread).genmc_tid;
-        // GenMC doesn't support ZSTs, so we set the minimum size to 1 byte
-        let genmc_size = size_to_genmc(size).max(1);
-        info!(
-            "GenMC: handle_alloc (thread: {curr_thread:?} ({genmc_tid:?}), size: {} (genmc size: {genmc_size} bytes), alignment: {alignment:?}, memory_kind: {memory_kind:?})",
-            size.bytes()
-        );
-        if memory_kind == MemoryKind::Machine(crate::MiriMemoryKind::Global) {
-            info!("GenMC: handle_alloc: TODO GENMC: maybe handle initialization of globals here?");
-        }
-        // kind: MemoryKind, TODO GENMC: Does GenMC care about the kind of Memory?
+        let chosen_address = if memory_kind == MiriMemoryKind::Global.into() {
+            info!("GenMC: global memory allocation: {alloc_id:?}");
+            ecx.get_global_allocation_address(&self.global_allocations, alloc_id)?
+        } else {
+            // TODO GENMC: Does GenMC need to know about the kind of Memory?
 
-        let chosen_address = {
+            // eprintln!(
+            //     "handle_alloc ({memory_kind:?}): Custom backtrace: {}",
+            //     std::backtrace::Backtrace::force_capture()
+            // );
+            // TODO GENMC: should we put this before the special handling for globals?
+            if self.allow_data_races.get() {
+                // TODO GENMC: handle this properly
+                info!("GenMC: skipping `handle_alloc`");
+                return interp_ok(0);
+            }
+            let thread_infos = self.thread_infos.borrow();
+            let curr_thread = machine.threads.active_thread();
+            let genmc_tid = thread_infos.get_info(curr_thread).genmc_tid;
+            // GenMC doesn't support ZSTs, so we set the minimum size to 1 byte
+            let genmc_size = size_to_genmc(size).max(1);
+            info!(
+                "GenMC: handle_alloc (thread: {curr_thread:?} ({genmc_tid:?}), size: {} (genmc size: {genmc_size} bytes), alignment: {alignment:?}, memory_kind: {memory_kind:?})",
+                size.bytes()
+            );
+
             let alignment = alignment.bytes_usize();
 
             let mut mc = self.handle.borrow_mut();
@@ -873,7 +884,9 @@ impl GenmcCtx {
             if genmc_address == 0 {
                 throw_unsup_format!("TODO GENMC: we got address '0' from malloc");
             }
-            to_miri_size(genmc_address).bytes()
+            let chosen_addr = to_miri_size(genmc_address).bytes();
+            assert_eq!(0, chosen_addr & GENMC_GLOBAL_ADDRESSES_MASK);
+            chosen_addr
         };
         // Sanity check the address alignment:
         assert_eq!(
@@ -896,6 +909,7 @@ impl GenmcCtx {
     pub(crate) fn handle_dealloc<'tcx>(
         &self,
         machine: &MiriMachine<'tcx>,
+        alloc_id: AllocId,
         address: Size,
         size: Size,
         align: Align,
@@ -905,6 +919,11 @@ impl GenmcCtx {
             // TODO GENMC: skipping ZST dealloc
             return interp_ok(());
         }
+        assert_ne!(
+            kind,
+            MiriMemoryKind::Global.into(),
+            "we probably shouldn't try to deallocate global allocations (alloc_id: {alloc_id:?})"
+        );
         if self.allow_data_races.get() {
             // TODO GENMC: handle this properly, should this be skipped in this mode?
             info!("GenMC: skipping `handle_dealloc`");

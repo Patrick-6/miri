@@ -1,5 +1,5 @@
 use rustc_abi::{Align, Size};
-use rustc_const_eval::interpret::{InterpCx, InterpResult};
+use rustc_const_eval::interpret::{AllocId, InterpCx, InterpResult};
 use rustc_middle::mir;
 
 use crate::{
@@ -160,7 +160,8 @@ impl GenmcCtx {
 
     pub(crate) fn handle_alloc<'tcx>(
         &self,
-        _machine: &MiriMachine<'tcx>,
+        _ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
+        _alloc_id: AllocId,
         _size: Size,
         _alignment: Align,
         _memory_kind: MemoryKind,
@@ -171,6 +172,7 @@ impl GenmcCtx {
     pub(crate) fn handle_dealloc<'tcx>(
         &self,
         _machine: &MiriMachine<'tcx>,
+        _alloc_id: AllocId,
         _address: Size,
         _size: Size,
         _align: Align,

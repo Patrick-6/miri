@@ -35,6 +35,12 @@ pub struct ThreadInfoManager {
     thread_infos: Vec<ThreadInfo>,
 }
 
+impl Default for ThreadInfoManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ThreadInfoManager {
     #[must_use]
     pub fn new() -> Self {

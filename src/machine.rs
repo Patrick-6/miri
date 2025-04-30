@@ -1491,7 +1491,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         match &machine.data_race {
             GlobalDataRaceHandler::None => {}
             GlobalDataRaceHandler::Genmc(genmc_ctx) =>
-                genmc_ctx.handle_dealloc(machine, ptr.addr(), size, align, kind)?,
+                genmc_ctx.handle_dealloc(machine, alloc_id, ptr.addr(), size, align, kind)?,
             GlobalDataRaceHandler::Vclocks(_global_state) => {
                 let data_race = alloc_extra.data_race.as_vclocks_mut().unwrap();
                 data_race.write(
