@@ -132,6 +132,14 @@ mod ffi {
     #[must_use]
     #[derive(Debug)]
     struct ReadModifyWriteResult {
+        old_value: GenmcScalar,
+        new_value: GenmcScalar,
+        error: UniquePtr<CxxString>, // TODO GENMC: pass more error info here
+    }
+
+    #[must_use]
+    #[derive(Debug)]
+    struct CompareExchangeResult {
         old_value: GenmcScalar,      // TODO GENMC: handle bigger values
         error: UniquePtr<CxxString>, // TODO GENMC: pass more error info here
         is_success: bool,
@@ -209,6 +217,7 @@ mod ffi {
         type LoadResult;
         type StoreResult;
         type ReadModifyWriteResult;
+        type CompareExchangeResult;
         type VerificationError;
 
         type GenmcScalar;
@@ -255,7 +264,7 @@ mod ffi {
             success_store_ordering: MemOrdering,
             fail_load_ordering: MemOrdering,
             can_fail_spuriously: bool,
-        ) -> ReadModifyWriteResult;
+        ) -> CompareExchangeResult;
         fn handleStore(
             self: Pin<&mut MiriGenMCShim>,
             thread_id: i32,
