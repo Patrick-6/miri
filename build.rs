@@ -75,7 +75,8 @@ fn main() {
         .opt_level(opt_level)
         .debug(true)
         .warnings(false) // TODO GENMC (TESTING): try to fix some of those warnings
-        .std("c++20")
+        // .std("c++20")
+        .std("c++23") // TODO GENMC: is this ok?
         .flag("-fno-exceptions")
         .flag("-lffi")
         .flag("-ldl")
