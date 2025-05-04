@@ -30,6 +30,7 @@ chrono = { version = "0.4.38", default-features = false }
 chrono-tz = "0.10"
 directories = "6"
 bitflags = "2.6"
+# TODO GENMC: no c++23 feature in CXX?
 cxx = { version = "1.0.143", features = ["c++20"], optional = true }
 
 # Copied from `compiler/rustc/Cargo.toml`.
