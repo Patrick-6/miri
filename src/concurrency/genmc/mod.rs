@@ -905,7 +905,8 @@ impl GenmcCtx {
             alignment.bytes()
         );
 
-        if !SKIP_DUMMY_INITIALIZATION {
+        // TODO GENMC: remove dummy writes:
+        if !SKIP_DUMMY_INITIALIZATION && memory_kind != MiriMemoryKind::Global.into() {
             info!(
                 "GenMC: writing to allocated memory with dummy value: TODO GENMC: handle 'backdating' of allocation"
             );
