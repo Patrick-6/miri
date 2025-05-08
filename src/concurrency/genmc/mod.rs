@@ -349,6 +349,7 @@ fn size_to_genmc(miri_address: Size) -> usize {
     miri_address.bytes().try_into().unwrap()
 }
 
+/// GenMC Context creation and administrative / query actions
 impl GenmcCtx {
     /// Create a new `GenmcCtx` from a given config.
     pub fn new(miri_config: &MiriConfig, genmc_config: &GenmcConfig) -> Self {
@@ -416,7 +417,10 @@ impl GenmcCtx {
         let pinned_mc = mc.as_mut();
         pinned_mc.isExplorationDone()
     }
+}
 
+/// GenMC event handling. These methods are used to inform GenMC about events happening in the program, and to handle scheduling decisions.
+impl GenmcCtx {
     /**** Memory access handling ****/
 
     /// Inform GenMC that a new program execution has started.
