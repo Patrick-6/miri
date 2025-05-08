@@ -101,7 +101,8 @@ impl GlobalStateInner {
             .checked_add(max(info.size.bytes(), 1))
             .ok_or_else(|| err_exhaust!(AddressSpaceFull))?;
 
-        assert_ne!(0, base_addr % GENMC_GLOBAL_ADDRESSES_MASK);
+        assert_ne!(0, base_addr & GENMC_GLOBAL_ADDRESSES_MASK);
+        assert_ne!(0, self.next_base_addr & GENMC_GLOBAL_ADDRESSES_MASK);
         // Cache the address for future use.
         entry.insert(base_addr);
 
