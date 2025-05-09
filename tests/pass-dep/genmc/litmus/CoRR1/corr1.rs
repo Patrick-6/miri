@@ -15,9 +15,6 @@ use crate::utils_dep::*;
 
 #[unsafe(no_mangle)]
 fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
-    // TODO GENMC: Hack (since Miri handles allocations lazily, and GenMC doesn't, we need to use them so they are `malloced` before any other thread uses them)
-    X.store(0, Ordering::SeqCst);
-
     let thread_order = if cfg!(order1234) {
         [thread_1, thread_2, thread_3, thread_4]
     } else if cfg!(order4321) {

@@ -10,13 +10,10 @@ static mut Y: u64 = 0;
 #[unsafe(no_mangle)]
 fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
     unsafe {
-        // TODO GENMC: Hack (since Miri handles allocations lazily, and GenMC doesn't, we need to use them so they are `malloced` before the other thread starts)
-        (X, Y) = (0, 0);
-
         let atomic_ptr: AtomicPtr<u64> = AtomicPtr::new(&raw mut X);
 
         // TODO GENMC: Hack: mixed atomic/non-atomic:
-        atomic_ptr.store(&raw mut X, Ordering::SeqCst);
+        // atomic_ptr.store(&raw mut X, Ordering::SeqCst);
 
         let x_ptr = atomic_ptr.load(Ordering::SeqCst);
         *x_ptr = 10;
