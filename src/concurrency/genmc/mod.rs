@@ -18,7 +18,8 @@ use self::ffi::{
 use self::global_allocations::{EvalContextExtPriv as _, GlobalAllocationHandler};
 use self::helper::{
     NextInstrInfo, Threads, genmc_scalar_to_scalar, get_next_instr_info,
-    rhs_scalar_to_genmc_scalar, scalar_to_genmc_scalar,
+    option_scalar_to_genmc_scalar, rhs_scalar_to_genmc_scalar, scalar_to_genmc_scalar,
+    size_to_genmc, to_miri_size,
 };
 use self::mapping::{min_max_to_genmc_rmw_op, to_genmc_rmw_op};
 use self::thread_info_manager::{GenmcThreadId, GenmcThreadIdInner, ThreadInfoManager};
@@ -42,7 +43,7 @@ pub use self::ffi::GenmcParams;
 const IGNORE_NON_ATOMICS: bool = false;
 
 /// TODO GENMC: remove this:
-const SKIP_DUMMY_INITIALIZATION: bool = false;
+const SKIP_DUMMY_INITIALIZATION: bool = true;
 
 // TODO GENMC: maybe make this selectable? Or make a pre-reserved range for these?
 const DO_ZST_SKIP_HACK: bool = false;
@@ -125,6 +126,7 @@ mod ffi {
     struct GenmcScalar {
         value: u64,
         extra: u64,
+        is_init: bool,
     }
 
     /**** \/ Result & Error types \/ ****/
@@ -156,6 +158,7 @@ mod ffi {
     #[derive(Debug)]
     struct StoreResult {
         error: UniquePtr<CxxString>, // TODO GENMC: pass more error info here
+        isCoMaxWrite: bool,
     }
 
     #[must_use]
@@ -242,6 +245,7 @@ mod ffi {
             address: usize,
             size: usize,
             memory_ordering: MemOrdering,
+            old_value: GenmcScalar,
         ) -> LoadResult; // TODO GENMC: modify this to allow for handling pointers and u128
         fn handleReadModifyWrite(
             self: Pin<&mut MiriGenMCShim>,
@@ -252,6 +256,7 @@ mod ffi {
             store_ordering: MemOrdering,
             rmw_op: RMWBinOp,
             rhs_value: GenmcScalar,
+            old_value: GenmcScalar,
         ) -> ReadModifyWriteResult; // TODO GENMC: modify this to allow for handling pointers and u128
         fn handleCompareExchange(
             self: Pin<&mut MiriGenMCShim>,
@@ -260,6 +265,7 @@ mod ffi {
             size: usize,
             expected_value: GenmcScalar,
             new_value: GenmcScalar,
+            old_value: GenmcScalar,
             success_load_ordering: MemOrdering,
             success_store_ordering: MemOrdering,
             fail_load_ordering: MemOrdering,
@@ -271,6 +277,7 @@ mod ffi {
             address: usize,
             size: usize,
             value: GenmcScalar,
+            old_value: GenmcScalar,
             memory_ordering: MemOrdering,
             store_event_type: StoreEventType,
         ) -> StoreResult;
@@ -308,7 +315,8 @@ impl Default for ThreadStateInfo {
 }
 
 impl GenmcScalar {
-    pub const DUMMY: Self = Self { value: 0xDEADBEEF, extra: 0 };
+    pub const DUMMY: Self = Self { value: 0xDEADBEEF, extra: 0, is_init: true };
+    pub const UNINIT: Self = Self { value: 0, extra: 0, is_init: false };
 }
 
 pub struct GenmcCtx {
@@ -335,18 +343,6 @@ pub struct GenmcCtx {
     // TODO GENMC: maybe make this a (base, size), maybe BTreeMap/sorted vector for reverse lookups
     //          GenMC needs to have access to that
     // TODO: look at code of "pub struct GlobalStateInner"
-}
-
-/// Convert an address selected by GenMC into Miri's type for addresses.
-/// This function may panic on platforms with addresses larger than 64 bits
-fn to_miri_size(genmc_address: usize) -> Size {
-    Size::from_bytes(genmc_address)
-}
-
-/// Convert an address (originally selected by GenMC) back into form that GenMC expects
-/// This function should never panic, since we received the address from GenMC (as a `usize`)
-fn size_to_genmc(miri_address: Size) -> usize {
-    miri_address.bytes().try_into().unwrap()
 }
 
 /// GenMC Context creation and administrative / query actions
@@ -500,12 +496,15 @@ impl GenmcCtx {
         address: Size,
         size: Size,
         ordering: AtomicReadOrd,
+        // The value that we would get, if we were to do a non-atomic load here.
         old_val: Option<Scalar>,
     ) -> InterpResult<'tcx, Scalar> {
         info!("GenMC: atomic_load: old_val: {old_val:?}");
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let ordering = ordering.convert();
-        let read_value = self.atomic_load_impl(&ecx.machine, address, size, ordering)?;
+        let genmc_old_value = option_scalar_to_genmc_scalar(ecx, old_val)?;
+        let read_value =
+            self.atomic_load_impl(&ecx.machine, address, size, ordering, genmc_old_value)?;
         info!("GenMC: atomic_load: received value from GenMC: {read_value:?}");
         genmc_scalar_to_scalar(ecx, read_value, size)
     }
@@ -516,12 +515,15 @@ impl GenmcCtx {
         address: Size,
         size: Size,
         value: Scalar,
+        // The value that we would get, if we were to do a non-atomic load here.
+        old_value: Option<Scalar>,
         ordering: AtomicWriteOrd,
-    ) -> InterpResult<'tcx, ()> {
+    ) -> InterpResult<'tcx, bool> {
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let ordering = ordering.convert();
         let genmc_value = scalar_to_genmc_scalar(ecx, value)?;
-        self.atomic_store_impl(&ecx.machine, address, size, genmc_value, ordering)
+        let genmc_old_value = option_scalar_to_genmc_scalar(ecx, old_value)?;
+        self.atomic_store_impl(&ecx.machine, address, size, genmc_value, genmc_old_value, ordering)
     }
 
     pub(crate) fn atomic_fence<'tcx>(
@@ -557,6 +559,8 @@ impl GenmcCtx {
         ordering: AtomicRwOrd,
         (rmw_op, not): (mir::BinOp, bool),
         rhs_scalar: Scalar,
+        // The value that we would get, if we were to do a non-atomic load here.
+        old_value: Scalar,
     ) -> InterpResult<'tcx, (Scalar, Scalar)> {
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let (load_ordering, store_ordering) = ordering.to_genmc_memory_orderings();
@@ -565,6 +569,7 @@ impl GenmcCtx {
             "GenMC: atomic_rmw_op (op: {rmw_op:?}, not: {not}, genmc_rmw_op: {genmc_rmw_op:?}): rhs value: {rhs_scalar:?}, orderings ({load_ordering:?}, {store_ordering:?})"
         );
         let genmc_rhs_scalar = rhs_scalar_to_genmc_scalar(ecx, rhs_scalar)?;
+        let genmc_old_value = scalar_to_genmc_scalar(ecx, old_value)?;
         self.atomic_rmw_op_impl(
             ecx,
             address,
@@ -573,6 +578,7 @@ impl GenmcCtx {
             store_ordering,
             genmc_rmw_op,
             genmc_rhs_scalar,
+            genmc_old_value,
         )
     }
 
@@ -588,6 +594,8 @@ impl GenmcCtx {
         min: bool,
         is_signed: bool,
         rhs_scalar: Scalar,
+        // The value that we would get, if we were to do a non-atomic load here.
+        old_value: Scalar,
     ) -> InterpResult<'tcx, (Scalar, Scalar)> {
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let (load_ordering, store_ordering) = ordering.to_genmc_memory_orderings();
@@ -596,6 +604,7 @@ impl GenmcCtx {
             "GenMC: atomic_min_max_op (min: {min}, signed: {is_signed}, genmc_rmw_op: {genmc_rmw_op:?}): rhs value: {rhs_scalar:?}, orderings ({load_ordering:?}, {store_ordering:?})"
         );
         let genmc_rhs_scalar = rhs_scalar_to_genmc_scalar(ecx, rhs_scalar)?;
+        let genmc_old_value = scalar_to_genmc_scalar(ecx, old_value)?;
         self.atomic_rmw_op_impl(
             ecx,
             address,
@@ -604,6 +613,7 @@ impl GenmcCtx {
             store_ordering,
             genmc_rmw_op,
             genmc_rhs_scalar,
+            genmc_old_value,
         )
     }
 
@@ -614,6 +624,8 @@ impl GenmcCtx {
         size: Size,
         rhs_scalar: Scalar,
         ordering: AtomicRwOrd,
+        // The value that we would get, if we were to do a non-atomic load here.
+        old_value: Scalar,
     ) -> InterpResult<'tcx, (Scalar, Scalar)> {
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         // TODO GENMC: could maybe merge this with atomic_rmw?
@@ -624,6 +636,7 @@ impl GenmcCtx {
             "GenMC: atomic_exchange (op: {genmc_rmw_op:?}): new value: {rhs_scalar:?}, orderings ({load_ordering:?}, {store_ordering:?})"
         );
         let genmc_rhs_scalar = scalar_to_genmc_scalar(ecx, rhs_scalar)?;
+        let genmc_old_value = scalar_to_genmc_scalar(ecx, old_value)?;
         self.atomic_rmw_op_impl(
             ecx,
             address,
@@ -632,6 +645,7 @@ impl GenmcCtx {
             store_ordering,
             genmc_rmw_op,
             genmc_rhs_scalar,
+            genmc_old_value,
         )
     }
 
@@ -645,6 +659,8 @@ impl GenmcCtx {
         success: AtomicRwOrd,
         fail: AtomicReadOrd,
         can_fail_spuriously: bool,
+        // The value that we would get, if we were to do a non-atomic load here.
+        old_value: Scalar,
     ) -> InterpResult<'tcx, (Scalar, bool)> {
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         let machine = &ecx.machine;
@@ -673,6 +689,7 @@ impl GenmcCtx {
 
         let genmc_expected_value = scalar_to_genmc_scalar(ecx, expected_old_value)?;
         let genmc_new_value = scalar_to_genmc_scalar(ecx, new_value)?;
+        let genmc_old_value = scalar_to_genmc_scalar(ecx, old_value)?;
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut();
@@ -682,6 +699,7 @@ impl GenmcCtx {
             genmc_size,
             genmc_expected_value,
             genmc_new_value,
+            genmc_old_value,
             success_load_ordering,
             success_store_ordering,
             fail_load_ordering,
@@ -732,8 +750,13 @@ impl GenmcCtx {
 
         if size.bytes() <= 8 {
             // NOTE: Values loaded non-atomically are still handled by Miri, so we discard whatever we get from GenMC
-            let _read_value =
-                self.atomic_load_impl(machine, address, size, MemOrdering::NotAtomic)?;
+            let _read_value = self.atomic_load_impl(
+                machine,
+                address,
+                size,
+                MemOrdering::NotAtomic,
+                GenmcScalar::DUMMY,
+            )?;
             return interp_ok(());
         }
         let alignment = address.bytes() % 8;
@@ -753,15 +776,25 @@ impl GenmcCtx {
             let chunk_addr = Size::from_bytes(chunk_address);
             let chunk_size = Size::from_bytes(8);
             info!("GenMC:   loading chunk @ {chunk_address:#x}");
-            let _read_value =
-                self.atomic_load_impl(machine, chunk_addr, chunk_size, MemOrdering::NotAtomic)?;
+            let _read_value = self.atomic_load_impl(
+                machine,
+                chunk_addr,
+                chunk_size,
+                MemOrdering::NotAtomic,
+                GenmcScalar::DUMMY,
+            )?;
         }
         // TODO GENMC (HACK): just assume the rest are 1 byte accesses:
         for offset in 0..rem {
             let chunk_addr = Size::from_bytes(end_address - rem + offset);
             let chunk_size = Size::from_bytes(1);
-            let _read_value =
-                self.atomic_load_impl(machine, chunk_addr, chunk_size, MemOrdering::NotAtomic)?;
+            let _read_value = self.atomic_load_impl(
+                machine,
+                chunk_addr,
+                chunk_size,
+                MemOrdering::NotAtomic,
+                GenmcScalar::DUMMY,
+            )?;
         }
         interp_ok(())
     }
@@ -771,10 +804,11 @@ impl GenmcCtx {
         machine: &MiriMachine<'tcx>,
         address: Size,
         size: Size,
+        // old_value: Option<Scalar>, // TODO GENMC(mixed atomic-non-atomic): is this needed?
     ) -> InterpResult<'tcx, ()> {
         if self.allow_data_races.get() {
             // TODO GENMC: handle this properly
-            info!("GenMC: skipping `handle_store`");
+            info!("GenMC: skipping `handle_store` for address {addr} == {addr:#x}, size: {}", size.bytes(), addr = address.bytes());
             return interp_ok(());
         }
         info!("GenMC: received memory_store (non-atomic): address: {address:?}, size: {size:?}");
@@ -784,14 +818,19 @@ impl GenmcCtx {
         }
 
         let dummy_scalar = GenmcScalar::DUMMY;
+        // let genmc_old_value = option_scalar_to_genmc_scalar(ecx, old_value)?;
         if size.bytes() <= 8 {
-            return self.atomic_store_impl(
+            // TODO GENMC(mixed atomic-non-atomics): anything to do here?
+            let _is_co_max_write = self.atomic_store_impl(
                 machine,
                 address,
                 size,
                 dummy_scalar,
+                // genmc_old_value,
+                GenmcScalar::DUMMY,
                 MemOrdering::NotAtomic,
-            );
+            )?;
+            return interp_ok(());
         }
         let alignment = address.bytes() % 8;
         if alignment != 0 {
@@ -811,11 +850,14 @@ impl GenmcCtx {
             let chunk_addr = Size::from_bytes(chunk_address);
             let chunk_size = Size::from_bytes(8);
             info!("GenMC:   writing chunk @ {chunk_address:#x}");
-            self.atomic_store_impl(
+            // TODO GENMC(mixed atomic-non-atomics): anything to do here?
+            let _is_co_max_write = self.atomic_store_impl(
                 machine,
                 chunk_addr,
                 chunk_size,
                 dummy_scalar,
+                // genmc_old_value,
+                GenmcScalar::DUMMY,
                 MemOrdering::NotAtomic,
             )?;
         }
@@ -823,11 +865,14 @@ impl GenmcCtx {
         for offset in 0..rem {
             let chunk_addr = Size::from_bytes(end_address - rem + offset);
             let chunk_size = Size::from_bytes(8);
-            self.atomic_store_impl(
+            // TODO GENMC(mixed atomic-non-atomics): anything to do here?
+            let _is_co_max_write = self.atomic_store_impl(
                 machine,
                 chunk_addr,
                 chunk_size,
                 dummy_scalar,
+                // genmc_old_value,
+                GenmcScalar::DUMMY,
                 MemOrdering::NotAtomic,
             )?;
         }
@@ -914,7 +959,13 @@ impl GenmcCtx {
             info!(
                 "GenMC: writing to allocated memory with dummy value: TODO GENMC: handle 'backdating' of allocation"
             );
-            self.memory_store(machine, Size::from_bytes(chosen_address), size)?;
+            panic!();
+            // self.memory_store(
+            //     machine,
+            //     Size::from_bytes(chosen_address),
+            //     size,
+            //     Some(dummy_scalar), // TODO GENMC: possibly wrong
+            // )?;
         }
 
         interp_ok(chosen_address)
@@ -1139,6 +1190,7 @@ impl GenmcCtx {
         address: Size,
         size: Size,
         memory_ordering: MemOrdering,
+        genmc_old_value: GenmcScalar,
     ) -> InterpResult<'tcx, GenmcScalar> {
         assert!(
             size.bytes() <= 8,
@@ -1167,8 +1219,13 @@ impl GenmcCtx {
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut();
-        let load_result =
-            pinned_mc.handleLoad(genmc_tid.0, genmc_address, genmc_size, memory_ordering);
+        let load_result = pinned_mc.handleLoad(
+            genmc_tid.0,
+            genmc_address,
+            genmc_size,
+            memory_ordering,
+            genmc_old_value,
+        );
 
         if let Some(error) = load_result.error.as_ref() {
             let msg = error.to_string_lossy().to_string();
@@ -1185,8 +1242,9 @@ impl GenmcCtx {
         address: Size,
         size: Size,
         genmc_value: GenmcScalar,
+        genmc_old_value: GenmcScalar,
         memory_ordering: MemOrdering,
-    ) -> InterpResult<'tcx, ()> {
+    ) -> InterpResult<'tcx, bool> {
         assert!(
             size.bytes() <= 8,
             "TODO GENMC: no support for accesses larger than 8 bytes (got {} bytes)",
@@ -1194,7 +1252,7 @@ impl GenmcCtx {
         );
         if IGNORE_NON_ATOMICS && memory_ordering == MemOrdering::NotAtomic {
             info!("GenMC: TODO GENMC: skipping non-atomic store!");
-            return interp_ok(());
+            return interp_ok(false);
         }
         assert_ne!(0, size.bytes());
         let thread_infos = self.thread_infos.borrow();
@@ -1216,6 +1274,7 @@ impl GenmcCtx {
             genmc_address,
             genmc_size,
             genmc_value,
+            genmc_old_value,
             memory_ordering,
             StoreEventType::Normal,
         );
@@ -1226,7 +1285,7 @@ impl GenmcCtx {
             throw_ub_format!("{}", msg); // TODO GENMC: proper error handling: find correct error here
         }
 
-        interp_ok(())
+        interp_ok(store_result.isCoMaxWrite)
     }
 
     pub(crate) fn atomic_rmw_op_impl<'tcx>(
@@ -1238,6 +1297,7 @@ impl GenmcCtx {
         store_ordering: MemOrdering,
         genmc_rmw_op: RMWBinOp,
         genmc_rhs_scalar: GenmcScalar,
+        genmc_old_value: GenmcScalar,
     ) -> InterpResult<'tcx, (Scalar, Scalar)> {
         assert!(
             size.bytes() <= 8,
@@ -1267,6 +1327,7 @@ impl GenmcCtx {
             store_ordering,
             genmc_rmw_op,
             genmc_rhs_scalar,
+            genmc_old_value,
         );
 
         if let Some(error) = rmw_result.error.as_ref() {

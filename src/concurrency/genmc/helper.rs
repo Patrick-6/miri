@@ -12,6 +12,18 @@ use crate::{
     throw_unsup_format,
 };
 
+/// Convert an address selected by GenMC into Miri's type for addresses.
+/// This function may panic on platforms with addresses larger than 64 bits
+pub fn to_miri_size(genmc_address: usize) -> Size {
+    Size::from_bytes(genmc_address)
+}
+
+/// Convert an address (originally selected by GenMC) back into form that GenMC expects
+/// This function should never panic, since we received the address from GenMC (as a `usize`)
+pub fn size_to_genmc(miri_address: Size) -> usize {
+    miri_address.bytes().try_into().unwrap()
+}
+
 /// Like `scalar_to_genmc_scalar`, but returns an error if the scalar is not an integer
 pub fn rhs_scalar_to_genmc_scalar<'tcx>(
     ecx: &MiriInterpCx<'tcx>,
@@ -23,6 +35,17 @@ pub fn rhs_scalar_to_genmc_scalar<'tcx>(
     scalar_to_genmc_scalar(ecx, scalar)
 }
 
+pub fn option_scalar_to_genmc_scalar<'tcx>(
+    ecx: &MiriInterpCx<'tcx>,
+    maybe_scalar: Option<Scalar>,
+) -> InterpResult<'tcx, GenmcScalar> {
+    if let Some(scalar) = maybe_scalar {
+        scalar_to_genmc_scalar(ecx, scalar)
+    } else {
+        interp_ok(GenmcScalar::UNINIT)
+    }
+}
+
 pub fn scalar_to_genmc_scalar<'tcx>(
     ecx: &MiriInterpCx<'tcx>,
     scalar: Scalar,
@@ -31,7 +54,7 @@ pub fn scalar_to_genmc_scalar<'tcx>(
         rustc_const_eval::interpret::Scalar::Int(scalar_int) => {
             // TODO GENMC: u128 support
             let value: u64 = scalar_int.to_uint(scalar_int.size()).try_into().unwrap(); // TODO GENMC: doesn't work for size != 8
-            GenmcScalar { value, extra: 0 }
+            GenmcScalar { value, extra: 0, is_init: true }
         }
         rustc_const_eval::interpret::Scalar::Ptr(pointer, size) => {
             let addr = Pointer::from(pointer).addr();
@@ -42,7 +65,7 @@ pub fn scalar_to_genmc_scalar<'tcx>(
                 rustc_const_eval::interpret::Machine::ptr_get_alloc(ecx, pointer, size.into())
                     .unwrap();
             let base_addr = ecx.addr_from_alloc_id(alloc_id, None)?;
-            GenmcScalar { value: addr.bytes(), extra: base_addr }
+            GenmcScalar { value: addr.bytes(), extra: base_addr, is_init: true }
         }
     })
 }
