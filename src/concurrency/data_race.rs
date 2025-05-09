@@ -752,7 +752,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         // This is also a very special exception where we just ignore an error -- if this read
         // was UB e.g. because the memory is uninitialized, we don't want to know!
         let old_val = this.run_for_validation_mut(|this| this.read_scalar(dest)).discard_err();
-        this.allow_data_races_mut(move |this| this.write_scalar(val, dest))?;
+        // TODO GENMC: should the `write_scalar` be here, or after the GenMC stuff?
 
         // Inform GenMC about the atomic store.
         if let Some(genmc_ctx) = this.machine.data_race.as_genmc_ref() {
@@ -769,6 +769,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
             }
             return interp_ok(());
         }
+        this.allow_data_races_mut(move |this| this.write_scalar(val, dest))?;
         this.validate_atomic_store(dest, atomic)?;
         this.buffered_atomic_write(val, dest, atomic, old_val)
     }

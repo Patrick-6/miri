@@ -668,7 +668,7 @@ impl GenmcCtx {
         let fail_load_ordering = fail.convert();
 
         info!(
-            "GenMC: atomic_compare_exchange, address: {address:?}, size: {size:?} (expect: {expected_old_value:?}, new: {new_value:?}, {success:?}, {fail:?}), can fail spuriously: {can_fail_spuriously}"
+            "GenMC: atomic_compare_exchange, address: {address:?}, size: {size:?} (expect: {expected_old_value:?}, new: {new_value:?}, old_value: {old_value:?}, {success:?}, {fail:?}), can fail spuriously: {can_fail_spuriously}"
         );
         info!(
             "GenMC: atomic_compare_exchange orderings: success: ({success_load_ordering:?}, {success_store_ordering:?}), failure load ordering: {fail_load_ordering:?}"
@@ -808,7 +808,11 @@ impl GenmcCtx {
     ) -> InterpResult<'tcx, ()> {
         if self.allow_data_races.get() {
             // TODO GENMC: handle this properly
-            info!("GenMC: skipping `handle_store` for address {addr} == {addr:#x}, size: {}", size.bytes(), addr = address.bytes());
+            info!(
+                "GenMC: skipping `handle_store` for address {addr} == {addr:#x}, size: {}",
+                size.bytes(),
+                addr = address.bytes()
+            );
             return interp_ok(());
         }
         info!("GenMC: received memory_store (non-atomic): address: {address:?}, size: {size:?}");
@@ -1212,7 +1216,8 @@ impl GenmcCtx {
         let genmc_tid = thread_infos.get_info(curr_thread_id).genmc_tid;
 
         info!(
-            "GenMC: load, thread: {curr_thread_id:?} ({genmc_tid:?}), address: {address:?}, size: {size:?}, ordering: {memory_ordering:?}"
+            "GenMC: load, thread: {curr_thread_id:?} ({genmc_tid:?}), address: {addr} == {addr:#x}, size: {size:?}, ordering: {memory_ordering:?}, old_value: {genmc_old_value:#x?}",
+            addr = address.bytes()
         );
         let genmc_address = size_to_genmc(address);
         let genmc_size = size_to_genmc(size);
@@ -1232,6 +1237,8 @@ impl GenmcCtx {
             info!("GenMC: load operation returned an error: \"{msg}\"");
             throw_ub_format!("{}", msg); // TODO GENMC: proper error handling: find correct error here
         }
+
+        info!("GenMC: load returned value: {:?}", load_result.read_value);
 
         interp_ok(load_result.read_value)
     }
