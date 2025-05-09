@@ -124,7 +124,7 @@ pub(super) trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
         let global_state = global_allocation_handler.inner.read().unwrap();
         if let Some(base_addr) = global_state.base_addr.get(&alloc_id) {
             info!(
-                "GenMC: address for global with alloc id {alloc_id:?} was cached: {base_addr:#x}"
+                "GenMC: address for global with alloc id {alloc_id:?} was cached: {base_addr} == {base_addr:#x}"
             );
             return interp_ok(*base_addr);
         }
@@ -138,7 +138,9 @@ pub(super) trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
         if global_state.next_base_addr > this.target_usize_max() {
             throw_exhaust!(AddressSpaceFull);
         }
-        info!("GenMC: global with alloc id {alloc_id:?} got address {base_addr:#x}");
+        info!(
+            "GenMC: global with alloc id {alloc_id:?} got address: {base_addr} == {base_addr:#x}"
+        );
         interp_ok(base_addr)
     }
 }

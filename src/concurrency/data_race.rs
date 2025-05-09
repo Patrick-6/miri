@@ -720,7 +720,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
 
         if let Some(genmc_ctx) = this.machine.data_race.as_genmc_ref() {
             // FIXME(GenMC): Inform GenMC what a non-atomic read here would return, to support mixed atomics/non-atomics
-            let old_val = None;
+            let old_val = this.run_for_validation_ref(|this| this.read_scalar(place)).discard_err();
             return genmc_ctx.atomic_load(
                 this,
                 place.ptr().addr(),
@@ -752,14 +752,24 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
         // This is also a very special exception where we just ignore an error -- if this read
         // was UB e.g. because the memory is uninitialized, we don't want to know!
         let old_val = this.run_for_validation_mut(|this| this.read_scalar(dest)).discard_err();
-        this.allow_data_races_mut(move |this| this.write_scalar(val, dest))?;
+        // TODO GENMC: should the `write_scalar` be here, or after the GenMC stuff?
 
         // Inform GenMC about the atomic store.
         if let Some(genmc_ctx) = this.machine.data_race.as_genmc_ref() {
             // FIXME(GenMC): Inform GenMC what a non-atomic read here would return, to support mixed atomics/non-atomics
-            genmc_ctx.atomic_store(this, dest.ptr().addr(), dest.layout.size, val, atomic)?;
+            if genmc_ctx.atomic_store(
+                this,
+                dest.ptr().addr(),
+                dest.layout.size,
+                val,
+                old_val,
+                atomic,
+            )? {
+                this.allow_data_races_mut(|this| this.write_scalar(val, dest))?;
+            }
             return interp_ok(());
         }
+        this.allow_data_races_mut(move |this| this.write_scalar(val, dest))?;
         this.validate_atomic_store(dest, atomic)?;
         this.buffered_atomic_write(val, dest, atomic, old_val)
     }
@@ -788,6 +798,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
                 atomic,
                 (op, not),
                 rhs.to_scalar(),
+                old.to_scalar(),
             )?;
             this.allow_data_races_mut(|this| this.write_scalar(new_val, place))?;
             return interp_ok(ImmTy::from_scalar(old_val, old.layout));
@@ -826,6 +837,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
                 place.layout.size,
                 new,
                 atomic,
+                old,
             )?;
             info!("GenMC: TODO GENMC: check if new_val: {new_val:?} needs to be written somewhere");
             // FIXME(GenMC): do we have to write `new_val` somewhere, e.g., like this?
@@ -864,6 +876,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
                 min,
                 old.layout.backend_repr.is_signed(),
                 rhs.to_scalar(),
+                old.to_scalar(),
             )?;
             this.allow_data_races_mut(|this| this.write_scalar(new_val, place))?;
             return interp_ok(ImmTy::from_scalar(old_val, old.layout));
@@ -926,6 +939,7 @@ pub trait EvalContextExt<'tcx>: MiriInterpCxExt<'tcx> {
                 success,
                 fail,
                 can_fail_spuriously,
+                old.to_scalar(),
             )?;
             if cmpxchg_success {
                 this.allow_data_races_mut(|this| this.write_scalar(new, place))?;

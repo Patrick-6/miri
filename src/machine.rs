@@ -1459,7 +1459,9 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         match &machine.data_race {
             GlobalDataRaceHandler::None => {}
             GlobalDataRaceHandler::Genmc(genmc_ctx) => {
-                genmc_ctx.memory_store(machine, ptr.addr(), range.size)?;
+                // TODO GENMC(mixed atomic-non-atomic): is this needed?
+                // let old_val = this.run_for_validation_ref(|this| this.read_scalar(dest)).discard_err();
+                genmc_ctx.memory_store(machine, ptr.addr(), range.size /* , old_val */)?;
             }
             GlobalDataRaceHandler::Vclocks(_global_state) => {
                 let AllocDataRaceHandler::Vclocks(data_race, weak_memory) =

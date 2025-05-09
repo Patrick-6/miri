@@ -20,12 +20,6 @@ static mut D: u64 = 0;
 
 #[unsafe(no_mangle)]
 fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
-    // TODO GENMC: Hack (since Miri handles allocations lazily, and GenMC doesn't, we need to use them so they are `malloced` before any other thread uses them)
-    X.store(0, std::sync::atomic::Ordering::SeqCst);
-    unsafe {
-        (A, B, C, D) = (0, 0, 0, 0);
-    }
-
     let thread_order = [thread_1, thread_2, thread_3, thread_4, thread_5];
     let ids = unsafe { create_pthreads_no_params(thread_order) };
     unsafe { join_pthreads(ids) };

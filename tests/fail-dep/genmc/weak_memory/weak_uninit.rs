@@ -38,7 +38,7 @@ extern "C" fn thread_1(_value: *mut c_void) -> *mut c_void {
 extern "C" fn thread_2(_value: *mut c_void) -> *mut c_void {
     unsafe {
         let x = AtomicUsize::from_ptr(&raw mut F as *mut usize);
-        x.load(Ordering::Relaxed); //~ERROR: TODO GENMC: checkForRaces failed
+        x.load(Ordering::Relaxed); //~ERROR: using uninitialized data
         std::ptr::null_mut()
     }
 }
@@ -47,6 +47,8 @@ extern "C" fn thread_2(_value: *mut c_void) -> *mut c_void {
 fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
     // Unlike with the non-GenMC version of this test, we should only need 1 iteration to detect the bug:
     unsafe {
+        // TODO GENMC: initialize static, then write uninitialized value into it in main
+
         // TODO GENMC (HACK): access the global:
         F = F;
 

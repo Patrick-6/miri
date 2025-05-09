@@ -20,13 +20,6 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
     let attr: *const pthread_attr_t = std::ptr::null();
     let value: *mut c_void = std::ptr::null_mut();
 
-    // TODO GENMC: Hack (since Miri handles allocations lazily, and GenMC doesn't, we need to use them so they are `malloced` before the other thread starts)
-    // unsafe { X.as_ptr().write(0) };
-    // unsafe { Y.as_ptr().write(0) };
-    // TODO GENMC: Make the initial writes atomic so GenMC sees them
-    X.store(0, STORE_ORD);
-    Y.store(0, STORE_ORD);
-
     let ret_create = unsafe { libc::pthread_create(&raw mut thread_id, attr, thread_func, value) };
     assert!(ret_create == 0);
 
