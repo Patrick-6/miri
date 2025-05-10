@@ -5,7 +5,7 @@ use rustc_middle::mir::Terminator;
 use rustc_middle::ty::{self, ScalarInt};
 use tracing::info;
 
-use super::ffi::GenmcScalar;
+use super::GenmcScalar;
 use crate::alloc_addresses::EvalContextExt as _;
 use crate::{
     BorTag, MiriInterpCx, MiriMachine, Pointer, Provenance, Scalar, ThreadId, ThreadManager,
@@ -206,28 +206,5 @@ fn is_terminator_atomic<'tcx>(
             }
         }
         _ => false,
-    }
-}
-
-// TODO GENMC (CLEANUP): Remove this:
-#[derive(Debug)]
-pub struct Threads {
-    // TODO
-    // inner: &ThreadManager
-}
-
-#[allow(unused)] // TODO GENMC: remove
-impl Threads {
-    pub fn new() -> Self {
-        Self {}
-    }
-
-    pub fn is_enabled(&self, thread_id: u32) -> bool {
-        // eprintln!("Threads::is_enabled({thread_id})");
-        true
-    }
-
-    pub fn set_next_thread(&mut self, thread_id: u32) {
-        eprintln!("Threads::set_next_thread({thread_id})");
     }
 }
