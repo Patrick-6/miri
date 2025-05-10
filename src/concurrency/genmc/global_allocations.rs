@@ -11,9 +11,9 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_middle::{err_exhaust, throw_exhaust};
 use tracing::info;
 
+use super::GENMC_GLOBAL_ADDRESSES_MASK;
+use super::cxx_interface::getGlobalAllocStaticMask;
 use crate::alloc_addresses::align_addr;
-use crate::concurrency::genmc::GENMC_GLOBAL_ADDRESSES_MASK;
-use crate::concurrency::genmc::ffi::getGlobalAllocStaticMask;
 
 #[derive(Debug, Default)]
 pub struct GlobalAllocationHandler {
