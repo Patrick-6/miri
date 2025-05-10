@@ -1,11 +1,3 @@
-#[cfg(feature = "genmc")]
-use std::ffi::os_str;
-#[cfg(feature = "genmc")]
-use std::process::Command;
-
-#[cfg(feature = "genmc")]
-use walkdir::WalkDir;
-
 #[cfg(not(feature = "genmc"))]
 fn main() {
     println!("cargo:rerun-if-changed=src/genmc/build.rs");
@@ -13,6 +5,11 @@ fn main() {
 
 #[cfg(feature = "genmc")]
 fn main() {
+    use std::ffi::os_str;
+    use std::process::Command;
+
+    use walkdir::WalkDir;
+
     // Build the project in the path `foo` and installs it in `$OUT_DIR`
     // let dst = autotools::build("genmc");
 
@@ -21,6 +18,9 @@ fn main() {
 
     const CXX_BRIDGE_INCLUDE_PATH: &str = "/root/miri/target/cxxbridge";
     const WORKSPACE_INCLUDE_PATH: &str = "/root/";
+
+    /// Rust source file containing the #[cxx::bridge] code for GenMC interop.
+    const GENMC_SOURCE_FILE: &str = "src/concurrency/genmc/cxx_interface.rs";
 
     // cxx_build::CFG.include_prefix = "";
 
@@ -36,9 +36,6 @@ fn main() {
     //     // .cflag("Wextra")
     //     .build();
 
-    // let cpp_flags = None;
-
-    // let opt_level = 0;
     let opt_level = 2;
 
     let debug_flags = "-D ENABLE_GENMC_DEBUG";
@@ -46,7 +43,7 @@ fn main() {
     let cpp_flags = Some(format!(
         "-O{opt_level} -g {debug_flags} -I {WORKSPACE_INCLUDE_PATH} -I {CXX_BRIDGE_INCLUDE_PATH}"
     ));
-    let autotools_cpp_flags = cpp_flags.clone().map(|flags| format!("CXXFLAGS={flags}"));
+    let autotools_cpp_flags = cpp_flags.as_ref().map(|flags| format!("CXXFLAGS={flags}"));
     let autotools_c_flags = cpp_flags.map(|flags| format!("CFLAGS={flags}"));
 
     // HACK: GenMC uses autotools, this is a bit of a HACK to make this work (should be replaced at some point)
@@ -68,15 +65,12 @@ fn main() {
     );
     std::env::set_current_dir("../").unwrap();
 
-    let genmc_source_file = "src/concurrency/genmc/mod.rs";
-
-    cxx_build::bridge(genmc_source_file)
+    cxx_build::bridge(GENMC_SOURCE_FILE)
         .compiler("g++") // TODO GENMC (BUILD): make sure GenMC uses the same compiler as the cxx_bridge
         .opt_level(opt_level)
         .debug(true)
         .warnings(false) // TODO GENMC (TESTING): try to fix some of those warnings
-        // .std("c++20")
-        .std("c++23") // TODO GENMC: is this ok?
+        .std("c++20")
         .flag("-fno-exceptions")
         .flag("-lffi")
         .flag("-ldl")
@@ -95,7 +89,7 @@ fn main() {
     println!("cargo::warning=New working directory': {:?}'", std::env::current_dir().unwrap());
 
     assert!(
-        Command::new("make").arg("-j8").status().expect("failed to run command").success(),
+        Command::new("make").arg("-j").status().expect("failed to run command").success(),
         "make failed!"
     );
     std::env::set_current_dir("../").unwrap();
@@ -109,9 +103,9 @@ fn main() {
     println!("cargo::rustc-link-lib=dl");
     println!("cargo::rustc-link-lib=dylib=LLVM-19");
 
-    println!("cargo:rerun-if-changed={genmc_source_file}");
+    println!("cargo:rerun-if-changed={GENMC_SOURCE_FILE}");
 
-    // Recursively walk the directory
+    // We should rerun the makefile if any GenMC files is changed
     let extensions = ["cpp", "cc", "hpp", "h", "c", "am"].map(os_str::OsStr::new);
     for entry in WalkDir::new(GENMC_PATH).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
