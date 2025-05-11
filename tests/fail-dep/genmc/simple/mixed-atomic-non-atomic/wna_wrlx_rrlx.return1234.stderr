@@ -1,13 +1,13 @@
 error: Undefined Behavior: entering unreachable code
-  --> tests/fail-dep/genmc/simple/2w2w_acq_rel.rs:LL:CC
+  --> tests/fail-dep/genmc/simple/mixed-atomic-non-atomic/wna_wrlx_rrlx.rs:LL:CC
    |
-LL |         unsafe { std::hint::unreachable_unchecked() };
-   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ entering unreachable code
+LL |             std::hint::unreachable_unchecked();
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ entering unreachable code
    |
    = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
    = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
-   = note: BACKTRACE:
-   = note: inside `miri_start` at tests/fail-dep/genmc/simple/2w2w_acq_rel.rs:LL:CC
+   = note: BACKTRACE on thread `unnamed-ID`:
+   = note: inside `read_relaxed` at tests/fail-dep/genmc/simple/mixed-atomic-non-atomic/wna_wrlx_rrlx.rs:LL:CC
 
 note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
 
