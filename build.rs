@@ -13,11 +13,16 @@ fn main() {
     // Build the project in the path `foo` and installs it in `$OUT_DIR`
     // let dst = autotools::build("genmc");
 
+    let make_command_num_threads = num_cpus::get();
+
     const GENMC_PATH: &str = "./genmc";
     const LLVM_PATH: &str = "/usr/lib/llvm-19/lib";
 
-    const CXX_BRIDGE_INCLUDE_PATH: &str = "/root/miri/target/cxxbridge";
-    const WORKSPACE_INCLUDE_PATH: &str = "/root/";
+    let mut workspace_include_path = std::env::current_dir().unwrap(); // TODO GENMC: is this still required?
+    workspace_include_path.pop();
+    let mut cxx_bridge_include_path = std::env::current_dir().unwrap();
+    cxx_bridge_include_path.push("target");
+    cxx_bridge_include_path.push("cxxbridge");
 
     /// Rust source file containing the #[cxx::bridge] code for GenMC interop.
     const GENMC_SOURCE_FILE: &str = "src/concurrency/genmc/cxx_interface.rs";
@@ -41,7 +46,9 @@ fn main() {
     let debug_flags = "-D ENABLE_GENMC_DEBUG";
     // let debug_flags = "-D_GLIBCXX_DEBUG"; // TODO: this causes issue, code compiled with CXX is incompatible with other code
     let cpp_flags = Some(format!(
-        "-O{opt_level} -g {debug_flags} -I {WORKSPACE_INCLUDE_PATH} -I {CXX_BRIDGE_INCLUDE_PATH}"
+        "-O{opt_level} -g {debug_flags} -I {} -I {}",
+        workspace_include_path.to_str().unwrap(),
+        cxx_bridge_include_path.to_str().unwrap()
     ));
     let autotools_cpp_flags = cpp_flags.as_ref().map(|flags| format!("CXXFLAGS={flags}"));
     let autotools_c_flags = cpp_flags.map(|flags| format!("CFLAGS={flags}"));
@@ -58,6 +65,7 @@ fn main() {
             .success(),
         "autoreconf failed!"
     );
+    // let args = [Some(format!("--with-llvm={LLVM_PATH}")), autotools_c_flags, autotools_cpp_flags].into_iter().flatten();
     let args = [autotools_c_flags, autotools_cpp_flags].into_iter().flatten();
     assert!(
         Command::new("./configure").args(args).status().expect("failed to run command").success(),
@@ -89,7 +97,7 @@ fn main() {
     println!("cargo::warning=New working directory': {:?}'", std::env::current_dir().unwrap());
 
     assert!(
-        Command::new("make").arg("-j").status().expect("failed to run command").success(),
+        Command::new("make").arg(format!("-j{make_command_num_threads}")).status().expect("failed to run command").success(),
         "make failed!"
     );
     std::env::set_current_dir("../").unwrap();
