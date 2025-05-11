@@ -80,6 +80,7 @@ check-cfg = ['cfg(bootstrap)']
 
 [build-dependencies]
 cxx-build = { version = "1.0.143", features = ["parallel"], optional = true }
+num_cpus = "1.16.0"
 walkdir = { version = "2.5.0", optional = true }
 
 # Be aware that this file is inside a workspace when used via the
