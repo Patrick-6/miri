@@ -477,7 +477,7 @@ impl GenmcCtx {
                 address,
                 size,
                 MemOrdering::NotAtomic,
-                GenmcScalar::DUMMY,
+                GenmcScalar::UNINIT, // Don't use DUMMY here, since that might have it stored as the initial value
             )?;
             return interp_ok(());
         }
@@ -503,7 +503,7 @@ impl GenmcCtx {
                 chunk_addr,
                 chunk_size,
                 MemOrdering::NotAtomic,
-                GenmcScalar::DUMMY,
+                GenmcScalar::UNINIT, // Don't use DUMMY here, since that might have it stored as the initial value
             )?;
         }
         // TODO GENMC (HACK): just assume the rest are 1 byte accesses:
@@ -515,7 +515,7 @@ impl GenmcCtx {
                 chunk_addr,
                 chunk_size,
                 MemOrdering::NotAtomic,
-                GenmcScalar::DUMMY,
+                GenmcScalar::UNINIT, // Don't use DUMMY here, since that might have it stored as the initial value
             )?;
         }
         interp_ok(())
@@ -543,17 +543,14 @@ impl GenmcCtx {
             return interp_ok(());
         }
 
-        let dummy_scalar = GenmcScalar::DUMMY;
-        // let genmc_old_value = option_scalar_to_genmc_scalar(ecx, old_value)?;
         if size.bytes() <= 8 {
             // TODO GENMC(mixed atomic-non-atomics): anything to do here?
             let _is_co_max_write = self.atomic_store_impl(
                 machine,
                 address,
                 size,
-                dummy_scalar,
-                // genmc_old_value,
                 GenmcScalar::DUMMY,
+                GenmcScalar::UNINIT, // Don't use DUMMY here, since that might have it stored as the initial value
                 MemOrdering::NotAtomic,
             )?;
             return interp_ok(());
@@ -581,9 +578,8 @@ impl GenmcCtx {
                 machine,
                 chunk_addr,
                 chunk_size,
-                dummy_scalar,
-                // genmc_old_value,
                 GenmcScalar::DUMMY,
+                GenmcScalar::UNINIT, // Don't use DUMMY here, since that might have it stored as the initial value
                 MemOrdering::NotAtomic,
             )?;
         }
@@ -596,9 +592,8 @@ impl GenmcCtx {
                 machine,
                 chunk_addr,
                 chunk_size,
-                dummy_scalar,
-                // genmc_old_value,
                 GenmcScalar::DUMMY,
+                GenmcScalar::UNINIT, // Don't use DUMMY here, since that might have it stored as the initial value
                 MemOrdering::NotAtomic,
             )?;
         }
