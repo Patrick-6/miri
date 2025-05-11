@@ -1,4 +1,5 @@
 //@compile-flags: -Zmiri-genmc
+//@revisions: return1234 return42
 
 #![no_main]
 
@@ -33,12 +34,16 @@ extern "C" fn read_relaxed(value: *mut c_void) -> *mut c_void {
     unsafe {
         let x = (value as *const AtomicU64).as_ref().unwrap();
         let val = x.load(Ordering::Relaxed);
-        // TODO GENMC: can use revisions to test for both
-        if 1234 == val {
-            // std::hint::unreachable_unchecked(); // This one can be reached
+
+        let mut flag = false;
+        if cfg!(return1234) && 1234 == val {
+            flag = true;
         }
-        if 42 == val {
-            std::hint::unreachable_unchecked(); // This one is never reached (BUG)
+        if cfg!(return42) && 42 == val {
+            flag = true;
+        }
+        if flag {
+            std::hint::unreachable_unchecked(); //~ ERROR: entering unreachable code
         }
         std::ptr::null_mut()
     }
