@@ -1,15 +1,34 @@
 pub use self::ffi::*;
 
-// TODO GENMC: extract the ffi module if possible, to reduce number of required recompilation
+impl GenmcScalar {
+    pub const DUMMY: Self = Self { value: 0xDEADBEEF, extra: 0, is_init: true };
+    pub const UNINIT: Self = Self { value: 0, extra: 0, is_init: false };
+}
+
+impl Default for ThreadStateInfo {
+    fn default() -> Self {
+        Self { state: ThreadState::Terminated, is_next_instr_load: true }
+    }
+}
+
+impl Default for GenmcParams {
+    fn default() -> Self {
+        Self {
+            print_random_schedule_seed: false,
+            disable_race_detection: false,
+            quiet: true,
+            log_level_trace: false,
+            do_symmetry_reduction: false, // TODO GENMC (PERFORMANCE): maybe make this default `true`
+        }
+    }
+}
+
 #[cxx::bridge]
 mod ffi {
     /// Parameters that will be given to GenMC for setting up the model checker.
     /// (The fields of this struct are visible to both Rust and C++)
     #[derive(Clone, Debug)]
     struct GenmcParams {
-        #[allow(unused)]
-        pub memory_model: String, // TODO GENMC: (is this even needed?) could potentially make this an enum
-
         // pub genmc_seed: u64; // OR: Option<u64>
         pub print_random_schedule_seed: bool,
         pub disable_race_detection: bool,
@@ -60,7 +79,6 @@ mod ffi {
     }
 
     #[derive(Debug, Clone, Copy)]
-    #[allow(unused)] // TODO GENMC: remove once struct is used
     struct ThreadStateInfo {
         state: ThreadState,
         is_next_instr_load: bool,
@@ -142,11 +160,8 @@ mod ffi {
 
     /**** /\ Result & Error types /\ ****/
 
-    // extern "Rust" {
-    // }
-
     unsafe extern "C++" {
-        include!("miri/genmc/src/Verification/MiriInterface.hpp");
+        include!("Verification/MiriInterface.hpp");
 
         type MemOrdering;
         type RMWBinOp;
@@ -186,7 +201,7 @@ mod ffi {
             size: usize,
             memory_ordering: MemOrdering,
             old_value: GenmcScalar,
-        ) -> LoadResult; // TODO GENMC: modify this to allow for handling pointers and u128
+        ) -> LoadResult;
         fn handleReadModifyWrite(
             self: Pin<&mut MiriGenMCShim>,
             thread_id: i32,
@@ -197,7 +212,7 @@ mod ffi {
             rmw_op: RMWBinOp,
             rhs_value: GenmcScalar,
             old_value: GenmcScalar,
-        ) -> ReadModifyWriteResult; // TODO GENMC: modify this to allow for handling pointers and u128
+        ) -> ReadModifyWriteResult;
         fn handleCompareExchange(
             self: Pin<&mut MiriGenMCShim>,
             thread_id: i32,
