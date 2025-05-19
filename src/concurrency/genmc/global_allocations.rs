@@ -2,6 +2,7 @@ use std::cmp::max;
 use std::collections::hash_map::Entry;
 use std::sync::RwLock;
 
+use genmc_sys::getGlobalAllocStaticMask;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use rustc_const_eval::interpret::{
@@ -12,7 +13,6 @@ use rustc_middle::{err_exhaust, throw_exhaust};
 use tracing::info;
 
 use super::GENMC_GLOBAL_ADDRESSES_MASK;
-use super::cxx_interface::getGlobalAllocStaticMask;
 use crate::alloc_addresses::align_addr;
 
 #[derive(Debug, Default)]

@@ -16,19 +16,6 @@ enum GenmcPrintGraphSetting {
     All,
 }
 
-impl Default for GenmcParams {
-    fn default() -> Self {
-        Self {
-            memory_model: "RC11".into(),
-            print_random_schedule_seed: false,
-            disable_race_detection: false,
-            quiet: true,
-            log_level_trace: false,
-            do_symmetry_reduction: false, // TODO GENMC (PERFORMANCE): maybe make this default `true`
-        }
-    }
-}
-
 impl GenmcConfig {
     fn set_graph_printing(&mut self, param: &str) {
         if !param.starts_with("=") {

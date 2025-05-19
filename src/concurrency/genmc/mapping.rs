@@ -1,4 +1,5 @@
-use super::cxx_interface::{MemOrdering, RMWBinOp};
+use genmc_sys::{MemOrdering, RMWBinOp};
+
 use crate::{AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd};
 
 impl AtomicReadOrd {
