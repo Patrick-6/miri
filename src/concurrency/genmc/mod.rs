@@ -5,16 +5,16 @@ use std::sync::Arc;
 
 #[allow(unused_imports)] // TODO GENMC: false warning?
 use cxx::{CxxString, UniquePtr};
+use genmc_sys::{
+    GenmcScalar, MemOrdering, MiriGenMCShim, RMWBinOp, StoreEventType, ThreadState,
+    ThreadStateInfo, createGenmcHandle,
+};
 use rustc_abi::{Align, Size};
 use rustc_const_eval::interpret::{AllocId, InterpCx, InterpResult, interp_ok};
 use rustc_middle::{mir, throw_machine_stop, throw_ub_format, throw_unsup_format};
 use tracing::{info, warn};
 
 use self::cxx_extra::NonNullUniquePtr;
-use self::cxx_interface::{
-    GenmcScalar, MemOrdering, MiriGenMCShim, RMWBinOp, StoreEventType, ThreadState,
-    ThreadStateInfo, createGenmcHandle,
-};
 use self::global_allocations::{EvalContextExtPriv as _, GlobalAllocationHandler};
 use self::helper::{
     NextInstrInfo, genmc_scalar_to_scalar, get_next_instr_info, option_scalar_to_genmc_scalar,
@@ -35,10 +35,9 @@ mod helper;
 mod mapping;
 mod thread_info_manager;
 
-mod cxx_interface;
+pub use genmc_sys::GenmcParams;
 
 pub use self::config::GenmcConfig;
-pub use self::cxx_interface::GenmcParams;
 
 /// TODO GENMC: remove this:
 const IGNORE_NON_ATOMICS: bool = false;
@@ -50,17 +49,6 @@ const SKIP_DUMMY_INITIALIZATION: bool = true;
 /// FIXME: currently we use `getGlobalAllocStaticMask()` to ensure the constant is consistent between Miri and GenMC,
 ///   but if https://github.com/dtolnay/cxx/issues/1051 is fixed we could share the constant directly.
 const GENMC_GLOBAL_ADDRESSES_MASK: u64 = 1 << 63;
-
-impl Default for ThreadStateInfo {
-    fn default() -> Self {
-        Self { state: ThreadState::Terminated, is_next_instr_load: true }
-    }
-}
-
-impl GenmcScalar {
-    pub const DUMMY: Self = Self { value: 0xDEADBEEF, extra: 0, is_init: true };
-    pub const UNINIT: Self = Self { value: 0, extra: 0, is_init: false };
-}
 
 pub struct GenmcCtx {
     handle: RefCell<NonNullUniquePtr<MiriGenMCShim>>,

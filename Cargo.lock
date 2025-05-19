@@ -469,6 +469,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "genmc-sys"
+version = "0.11.0"
+dependencies = [
+ "cxx",
+ "cxx-build",
+ "num_cpus",
+ "walkdir",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -723,8 +733,8 @@ dependencies = [
  "chrono-tz",
  "colored",
  "cxx",
- "cxx-build",
  "directories",
+ "genmc-sys",
  "getrandom 0.3.2",
  "ipc-channel",
  "libc",
@@ -732,7 +742,6 @@ dependencies = [
  "libloading",
  "measureme",
  "nix",
- "num_cpus",
  "rand 0.9.0",
  "regex",
  "rustc_version",
@@ -741,7 +750,6 @@ dependencies = [
  "tempfile",
  "tikv-jemalloc-sys",
  "ui_test",
- "walkdir",
 ]
 
 [[package]]
