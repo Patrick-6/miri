@@ -35,6 +35,9 @@ pub use genmc_sys::GenmcParams;
 
 pub use self::config::GenmcConfig;
 
+const UNSUPPORTED_ATOMICS_SIZE_MSG: &str =
+    "GenMC mode currently does not support atomics larger than 8 bytes.";
+
 pub struct GenmcCtx {
     handle: RefCell<NonNullUniquePtr<MiriGenMCShim>>,
 
@@ -853,13 +856,11 @@ impl GenmcCtx {
         memory_ordering: MemOrdering,
         genmc_old_value: GenmcScalar,
     ) -> InterpResult<'tcx, GenmcScalar> {
-        assert!(
-            size.bytes() <= 8,
-            "TODO GENMC: no support for accesses larger than 8 bytes (got {} bytes)",
-            size.bytes()
-        );
+        assert!(size.bytes() != 0 && (memory_ordering == MemOrdering::NotAtomic || size.bytes().is_power_of_two()));
+        if size.bytes() > 8 {
+            throw_unsup_format!("{UNSUPPORTED_ATOMICS_SIZE_MSG}");
+        }
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
-        assert_ne!(0, size.bytes());
         let thread_infos = self.thread_infos.borrow();
         let curr_thread_id = machine.threads.active_thread();
         let genmc_tid = thread_infos.get_info(curr_thread_id).genmc_tid;
@@ -901,12 +902,10 @@ impl GenmcCtx {
         genmc_old_value: GenmcScalar,
         memory_ordering: MemOrdering,
     ) -> InterpResult<'tcx, bool> {
-        assert!(
-            size.bytes() <= 8,
-            "TODO GENMC: no support for accesses larger than 8 bytes (got {} bytes)",
-            size.bytes()
-        );
-        assert_ne!(0, size.bytes());
+        assert!(size.bytes() != 0 && (memory_ordering == MemOrdering::NotAtomic || size.bytes().is_power_of_two()));
+        if size.bytes() > 8 {
+            throw_unsup_format!("{UNSUPPORTED_ATOMICS_SIZE_MSG}");
+        }
         let thread_infos = self.thread_infos.borrow();
         let curr_thread_id = machine.threads.active_thread();
         let genmc_tid = thread_infos.get_info(curr_thread_id).genmc_tid;
@@ -990,9 +989,7 @@ impl GenmcCtx {
 
         let old_value_scalar = genmc_scalar_to_scalar(ecx, rmw_result.old_value, size)?;
 
-        info!("GenMC: TODO GENMC: fix: use the correct value here:");
-        let new_value_scalar = old_value_scalar;
-        // let new_value_scalar = genmc_scalar_to_scalar(ecx, rmw_result.new_value, size)?;
+        let new_value_scalar = genmc_scalar_to_scalar(ecx, rmw_result.new_value, size)?;
         interp_ok((old_value_scalar, new_value_scalar))
     }
 
