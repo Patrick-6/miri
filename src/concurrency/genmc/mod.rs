@@ -6,8 +6,8 @@ use std::sync::Arc;
 #[allow(unused_imports)] // TODO GENMC: false warning?
 use cxx::{CxxString, UniquePtr};
 use genmc_sys::{
-    GenmcScalar, MemOrdering, MiriGenMCShim, RMWBinOp, StoreEventType, ThreadState,
-    ThreadStateInfo, createGenmcHandle,
+    GENMC_GLOBAL_ADDRESSES_MASK, GenmcScalar, MemOrdering, MiriGenMCShim, RMWBinOp, StoreEventType,
+    ThreadState, ThreadStateInfo, createGenmcHandle,
 };
 use rustc_abi::{Align, Size};
 use rustc_const_eval::interpret::{AllocId, InterpCx, InterpResult, interp_ok};
@@ -44,11 +44,6 @@ const IGNORE_NON_ATOMICS: bool = false;
 
 /// TODO GENMC: remove this:
 const SKIP_DUMMY_INITIALIZATION: bool = true;
-
-/// Defined in "genmc/src/Support/SAddr.hpp"
-/// FIXME: currently we use `getGlobalAllocStaticMask()` to ensure the constant is consistent between Miri and GenMC,
-///   but if https://github.com/dtolnay/cxx/issues/1051 is fixed we could share the constant directly.
-const GENMC_GLOBAL_ADDRESSES_MASK: u64 = 1 << 63;
 
 pub struct GenmcCtx {
     handle: RefCell<NonNullUniquePtr<MiriGenMCShim>>,
