@@ -1,5 +1,10 @@
 pub use self::ffi::*;
 
+/// Defined in "genmc/src/Support/SAddr.hpp"
+/// FIXME: currently we use `getGlobalAllocStaticMask()` to ensure the constant is consistent between Miri and GenMC,
+///   but if https://github.com/dtolnay/cxx/issues/1051 is fixed we could share the constant directly.
+pub const GENMC_GLOBAL_ADDRESSES_MASK: u64 = 1 << 63;
+
 impl GenmcScalar {
     pub const DUMMY: Self = Self { value: 0xDEADBEEF, extra: 0, is_init: true };
     pub const UNINIT: Self = Self { value: 0, extra: 0, is_init: false };
