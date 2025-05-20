@@ -42,9 +42,6 @@ pub use self::config::GenmcConfig;
 /// TODO GENMC: remove this:
 const IGNORE_NON_ATOMICS: bool = false;
 
-/// TODO GENMC: remove this:
-const SKIP_DUMMY_INITIALIZATION: bool = true;
-
 pub struct GenmcCtx {
     handle: RefCell<NonNullUniquePtr<MiriGenMCShim>>,
 
@@ -642,20 +639,6 @@ impl GenmcCtx {
             "GenMC returned address {chosen_address} == {chosen_address:#x} with lower alignment than requested ({:})!",
             alignment.bytes()
         );
-
-        // TODO GENMC: remove dummy writes:
-        if !SKIP_DUMMY_INITIALIZATION && memory_kind != MiriMemoryKind::Global.into() {
-            info!(
-                "GenMC: writing to allocated memory with dummy value: TODO GENMC: handle 'backdating' of allocation"
-            );
-            panic!();
-            // self.memory_store(
-            //     machine,
-            //     Size::from_bytes(chosen_address),
-            //     size,
-            //     Some(dummy_scalar), // TODO GENMC: possibly wrong
-            // )?;
-        }
 
         interp_ok(chosen_address)
     }
