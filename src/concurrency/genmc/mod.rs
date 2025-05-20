@@ -1,10 +1,6 @@
 use std::cell::{Cell, RefCell};
-#[allow(unused_imports)] // TODO GENMC: false warning?
-use std::pin::Pin;
 use std::sync::Arc;
 
-#[allow(unused_imports)] // TODO GENMC: false warning?
-use cxx::{CxxString, UniquePtr};
 use genmc_sys::{
     GENMC_GLOBAL_ADDRESSES_MASK, GenmcScalar, MemOrdering, MiriGenMCShim, RMWBinOp, StoreEventType,
     ThreadState, ThreadStateInfo, createGenmcHandle,
@@ -38,9 +34,6 @@ mod thread_info_manager;
 pub use genmc_sys::GenmcParams;
 
 pub use self::config::GenmcConfig;
-
-/// TODO GENMC: remove this:
-const IGNORE_NON_ATOMICS: bool = false;
 
 pub struct GenmcCtx {
     handle: RefCell<NonNullUniquePtr<MiriGenMCShim>>,
@@ -865,14 +858,6 @@ impl GenmcCtx {
             "TODO GENMC: no support for accesses larger than 8 bytes (got {} bytes)",
             size.bytes()
         );
-        if IGNORE_NON_ATOMICS && memory_ordering == MemOrdering::NotAtomic {
-            info!("GenMC: TODO GENMC: skipping non-atomic load!");
-            return interp_ok(GenmcScalar::DUMMY);
-        }
-        // eprintln!(
-        //     "atomic_load_impl ({memory_ordering:?}): Custom backtrace: {}",
-        //     std::backtrace::Backtrace::force_capture()
-        // );
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
         assert_ne!(0, size.bytes());
         let thread_infos = self.thread_infos.borrow();
@@ -921,10 +906,6 @@ impl GenmcCtx {
             "TODO GENMC: no support for accesses larger than 8 bytes (got {} bytes)",
             size.bytes()
         );
-        if IGNORE_NON_ATOMICS && memory_ordering == MemOrdering::NotAtomic {
-            info!("GenMC: TODO GENMC: skipping non-atomic store!");
-            return interp_ok(false);
-        }
         assert_ne!(0, size.bytes());
         let thread_infos = self.thread_infos.borrow();
         let curr_thread_id = machine.threads.active_thread();
