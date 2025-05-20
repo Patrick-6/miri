@@ -45,12 +45,6 @@ const IGNORE_NON_ATOMICS: bool = false;
 /// TODO GENMC: remove this:
 const SKIP_DUMMY_INITIALIZATION: bool = true;
 
-// TODO GENMC: maybe make this selectable? Or make a pre-reserved range for these?
-const DO_ZST_SKIP_HACK: bool = false;
-const ZST_ADDRESS_BUFFER_SIZE: usize = 128 * 1024;
-
-const GENMC_MAIN_THREAD_ID: i32 = 0;
-
 /// Defined in "genmc/src/Support/SAddr.hpp"
 /// FIXME: currently we use `getGlobalAllocStaticMask()` to ensure the constant is consistent between Miri and GenMC,
 ///   but if https://github.com/dtolnay/cxx/issues/1051 is fixed we could share the constant directly.
@@ -70,9 +64,6 @@ pub struct GenmcCtx {
     stuck_execution_count: Cell<usize>,
 
     curr_thread_user_block: Cell<bool>,
-
-    // TODO GENMC (HACK): we make one large allocation to then use for ZSTs, to reduce the number of events we create for GenMC
-    zst_allocation_range: Cell<(usize, usize, usize)>,
 
     /// Keep track of global allocations, to ensure they keep the same address across different executions, even if the order of allocations changes.
     /// The `AllocId` for globals is stable across executions, so we can use it as an identifier.
@@ -110,7 +101,6 @@ impl GenmcCtx {
             allow_data_races: Cell::new(false),
             stuck_execution_count: Cell::new(0),
             curr_thread_user_block: Cell::new(false),
-            zst_allocation_range: Cell::new((0, 0, 0)),
             global_allocations: Default::default(),
         }
     }
@@ -166,15 +156,6 @@ impl GenmcCtx {
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut();
         pinned_mc.handleExecutionStart();
-
-        if DO_ZST_SKIP_HACK {
-            // We pre-allocate space for ZSTs, so GenMC doesn't need to handle them:
-            // TODO GENMC: why is this returning usize? Shouldn't it be u64?
-            let pinned_mc = mc.as_mut();
-            let addr = pinned_mc.handleMalloc(0, ZST_ADDRESS_BUFFER_SIZE, 1);
-            assert_ne!(addr, 0);
-            self.zst_allocation_range.set((addr, 0, ZST_ADDRESS_BUFFER_SIZE));
-        }
     }
 
     /// Inform GenMC that the program's execution has ended.
@@ -189,14 +170,6 @@ impl GenmcCtx {
         info!("Thread states after execution ends: {thread_states:?}");
 
         let mut mc = self.handle.borrow_mut();
-
-        if DO_ZST_SKIP_HACK {
-            // Free the space we reserved for ZSTs so there is no leak reported:
-            let pinned_mc = mc.as_mut();
-
-            let zst_range = self.zst_allocation_range.get();
-            pinned_mc.handleFree(GENMC_MAIN_THREAD_ID, zst_range.0, zst_range.2);
-        }
 
         let pinned_mc = mc.as_mut();
         let result = pinned_mc.handleExecutionEnd(&thread_states);
@@ -626,21 +599,6 @@ impl GenmcCtx {
         memory_kind: MemoryKind,
     ) -> InterpResult<'tcx, u64> {
         let machine = &ecx.machine;
-        if DO_ZST_SKIP_HACK && size.bytes() == 0 {
-            info!(
-                "GenMC: special handling for ZST allocation with alignment {}",
-                alignment.bytes()
-            );
-            // TODO GENMC: skip telling GenMC about ZST alloc:
-            let (base_addr, offset, max) = self.zst_allocation_range.get();
-            assert!(offset < max);
-            let addr = u64::try_from(base_addr + offset + 1).unwrap();
-            // TODO GENMC: this doesn't work for ZSTs with higher alignment requirements
-            assert_eq!(0, addr % alignment.bytes());
-            self.zst_allocation_range.set((base_addr, offset + 1, max));
-
-            return interp_ok(addr);
-        }
         let chosen_address = if memory_kind == MiriMemoryKind::Global.into() {
             info!("GenMC: global memory allocation: {alloc_id:?}");
             ecx.get_global_allocation_address(&self.global_allocations, alloc_id)?
@@ -716,10 +674,6 @@ impl GenmcCtx {
         align: Align,
         kind: MemoryKind,
     ) -> InterpResult<'tcx, ()> {
-        if DO_ZST_SKIP_HACK && size.bytes() == 0 {
-            // TODO GENMC: skipping ZST dealloc
-            return interp_ok(());
-        }
         assert_ne!(
             kind,
             MiriMemoryKind::Global.into(),
