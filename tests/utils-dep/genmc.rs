@@ -20,7 +20,7 @@ pub unsafe fn create_pthreads_no_params<const N: usize>(
 }
 
 pub unsafe fn join_pthreads<const N: usize>(thread_ids: [pthread_t; N]) {
-    thread_ids.map(|id| {
+    let _ = thread_ids.map(|id| {
         let ret = unsafe { libc::pthread_join(id, std::ptr::null_mut()) };
         if 0 != ret {
             std::process::abort();
