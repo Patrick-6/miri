@@ -12,9 +12,6 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
     unsafe {
         let atomic_ptr: AtomicPtr<u64> = AtomicPtr::new(&raw mut X);
 
-        // TODO GENMC: Hack: mixed atomic/non-atomic:
-        // atomic_ptr.store(&raw mut X, Ordering::SeqCst);
-
         let x_ptr = atomic_ptr.load(Ordering::SeqCst);
         *x_ptr = 10;
         if X != 10 {
