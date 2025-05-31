@@ -17,16 +17,11 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
     let attr: *const pthread_attr_t = std::ptr::null();
     let value: *mut c_void = std::ptr::null_mut();
 
-    // FLAG.store(42, SeqCst); // TODO GENMC:  HACK
-    unsafe { FLAG.as_ptr().write(42) }; // TODO GENMC:  HACK
-
-    let ret_create = unsafe { libc::pthread_create(&raw mut thread_id, attr, thread_func, value) };
-    assert!(ret_create == 0);
+    assert!(0 == unsafe { libc::pthread_create(&raw mut thread_id, attr, thread_func, value) });
 
     FLAG.store(1, SeqCst);
 
-    let ret_join = unsafe { libc::pthread_join(thread_id, std::ptr::null_mut()) };
-    assert!(ret_join == 0);
+    assert!(0 == unsafe { libc::pthread_join(thread_id, std::ptr::null_mut()) });
 
     let flag = FLAG.load(SeqCst);
     assert!(flag == 1 || flag == 2);

@@ -12,10 +12,6 @@ use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 
 use libc::{self, pthread_attr_t, pthread_t};
 
-const MAX_READERS: usize = 3;
-const MAX_WRITERS: usize = 3;
-const MAX_RDWR: usize = 3;
-
 const MAX_THREADS: usize = 32;
 
 const MAX_NODES: usize = 0xFF;
@@ -187,16 +183,12 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
 
     let num_threads = readers + writers + rdwr;
 
-    if readers > MAX_READERS || writers > MAX_WRITERS || rdwr > MAX_RDWR {
+    if num_threads > MAX_THREADS {
         std::process::abort();
     }
 
     let mut i = 0;
     unsafe {
-        // TODO REMOVE
-        // X[1].store(0, Ordering::Relaxed); // TODO GENMC (HACK): make non-atomic once GenMC supports mixed atomics/non-atomics
-        // X[2].store(0, Ordering::Relaxed); // TODO GENMC (HACK): make non-atomic once GenMC supports mixed atomics/non-atomics
-
         MyStack::init_stack(&mut STACK, num_threads);
 
         for j in 0..num_threads {
@@ -204,32 +196,28 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
         }
         for _ in 0..readers {
             let value: *mut c_void = (&raw mut PARAMS[i]) as *mut c_void;
-            let ret = libc::pthread_create(&raw mut THREADS[i], attr, thread_r, value);
-            if 0 != ret {
+            if 0 != libc::pthread_create(&raw mut THREADS[i], attr, thread_r, value) {
                 std::process::abort();
             }
             i += 1;
         }
         for _ in 0..writers {
             let value: *mut c_void = (&raw mut PARAMS[i]) as *mut c_void;
-            let ret = libc::pthread_create(&raw mut THREADS[i], attr, thread_w, value);
-            if 0 != ret {
+            if 0 != libc::pthread_create(&raw mut THREADS[i], attr, thread_w, value) {
                 std::process::abort();
             }
             i += 1;
         }
         for _ in 0..rdwr {
             let value: *mut c_void = (&raw mut PARAMS[i]) as *mut c_void;
-            let ret = libc::pthread_create(&raw mut THREADS[i], attr, thread_rw, value);
-            if 0 != ret {
+            if 0 != libc::pthread_create(&raw mut THREADS[i], attr, thread_rw, value) {
                 std::process::abort();
             }
             i += 1;
         }
 
         for i in 0..num_threads {
-            let ret = libc::pthread_join(THREADS[i], std::ptr::null_mut());
-            if 0 != ret {
+            if 0 != libc::pthread_join(THREADS[i], std::ptr::null_mut()) {
                 std::process::abort();
             }
         }
