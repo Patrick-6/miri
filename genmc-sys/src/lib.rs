@@ -166,7 +166,7 @@ mod ffi {
     /**** /\ Result & Error types /\ ****/
 
     unsafe extern "C++" {
-        include!("Verification/MiriInterface.hpp");
+        include!("MiriInterop/MiriInterface.hpp");
 
         type MemOrdering;
         type RMWBinOp;

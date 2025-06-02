@@ -7,6 +7,5 @@ edition = "2024"
 cxx = { version = "1.0.143", features = ["c++20"] }
 
 [build-dependencies]
-cxx-build = { version = "1.0.143", features = ["parallel"] }
-num_cpus = "1.16.0"
+cmake = "0.1.54"
 walkdir = { version = "2.5.0" }
