@@ -1147,6 +1147,12 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             return ecx.emulate_foreign_item(link_name, abi, &args, dest, ret, unwind);
         }
 
+        if let Some(genmc_ctx) = ecx.machine.data_race.as_genmc_ref()
+            && genmc_ctx.check_intercept_function(ecx, instance, args)?
+        {
+            return interp_ok(None);
+        }
+
         // Otherwise, load the MIR.
         interp_ok(Some((ecx.load_mir(instance.def, None)?, instance)))
     }

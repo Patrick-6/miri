@@ -968,7 +968,12 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             GlobalDataRaceHandler::Vclocks(data_race) =>
                 data_race.thread_created(&this.machine.threads, new_thread_id, current_span),
             GlobalDataRaceHandler::Genmc(genmc_ctx) =>
-                genmc_ctx.handle_thread_create(&this.machine.threads, new_thread_id)?,
+                genmc_ctx.handle_thread_create(
+                    &this.machine.threads,
+                    start_routine,
+                    &func_arg,
+                    new_thread_id,
+                )?,
         }
         // Write the current thread-id, switch to the next thread later
         // to treat this write operation as occurring on the current thread.

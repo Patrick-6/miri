@@ -684,6 +684,8 @@ impl GenmcCtx {
     pub(crate) fn handle_thread_create<'tcx>(
         &self,
         threads: &ThreadManager<'tcx>,
+        _start_routine: crate::Pointer, // TODO GENMC: pass info to GenMC
+        _func_arg: &crate::ImmTy<'tcx>,
         new_thread_id: ThreadId,
     ) -> InterpResult<'tcx, ()> {
         assert!(!self.allow_data_races.get()); // TODO GENMC: handle this properly
@@ -856,7 +858,10 @@ impl GenmcCtx {
         memory_ordering: MemOrdering,
         genmc_old_value: GenmcScalar,
     ) -> InterpResult<'tcx, GenmcScalar> {
-        assert!(size.bytes() != 0 && (memory_ordering == MemOrdering::NotAtomic || size.bytes().is_power_of_two()));
+        assert!(
+            size.bytes() != 0
+                && (memory_ordering == MemOrdering::NotAtomic || size.bytes().is_power_of_two())
+        );
         if size.bytes() > 8 {
             throw_unsup_format!("{UNSUPPORTED_ATOMICS_SIZE_MSG}");
         }
@@ -902,7 +907,10 @@ impl GenmcCtx {
         genmc_old_value: GenmcScalar,
         memory_ordering: MemOrdering,
     ) -> InterpResult<'tcx, bool> {
-        assert!(size.bytes() != 0 && (memory_ordering == MemOrdering::NotAtomic || size.bytes().is_power_of_two()));
+        assert!(
+            size.bytes() != 0
+                && (memory_ordering == MemOrdering::NotAtomic || size.bytes().is_power_of_two())
+        );
         if size.bytes() > 8 {
             throw_unsup_format!("{UNSUPPORTED_ATOMICS_SIZE_MSG}");
         }
@@ -1064,6 +1072,34 @@ impl GenmcCtx {
         pinned_mc.handleUserBlock(genmc_curr_thread.0);
 
         interp_ok(())
+    }
+}
+
+/// Other functionality not directly related to event handling
+impl GenmcCtx {
+    /// Given a `ty::Instance<'tcx>`, do any required special handling. Returns true if this `instance` should be skipped (i.e., no Mir should be executed for it).
+    pub fn check_intercept_function<'tcx>(
+        &self,
+        ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
+        instance: rustc_middle::ty::Instance<'tcx>,
+        args: &[rustc_const_eval::interpret::FnArg<'tcx, crate::Provenance>],
+    ) -> InterpResult<'tcx, bool> {
+        use rustc_span::sym;
+        if ecx.tcx.is_diagnostic_item(sym::sys_mutex_lock, instance.def_id()) {
+            assert!(!args.is_empty());
+            let arg = ecx.copy_fn_arg(&args[0]);
+            let addr_scalar = ecx.read_scalar(&arg)?;
+            let addr = ecx.read_target_usize(&arg)?;
+            info!(
+                "sys_mutex_lock, instance: {instance:?}, args: {args:?}, \n  read scalar: {addr_scalar:?}, address: {addr} == {addr:#x}",
+            );
+            todo!();
+        } else if ecx.tcx.is_diagnostic_item(sym::sys_mutex_try_lock, instance.def_id()) {
+            todo!();
+        } else if ecx.tcx.is_diagnostic_item(sym::sys_mutex_unlock, instance.def_id()) {
+            todo!();
+        }
+        interp_ok(false)
     }
 }
 
