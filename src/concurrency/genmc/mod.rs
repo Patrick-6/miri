@@ -457,35 +457,35 @@ impl GenmcCtx {
             )?;
             return interp_ok(());
         }
-        let alignment = address.bytes() % 8;
-        if alignment != 0 {
-            todo!(
-                "Memory accesses not aligned to at least 8 bytes not yet supported (addr: {address:?}, size: {size:?})"
-            );
-        }
+        // Handle possible misalignment: TODO GENMC: could always do largest power-of-two here
+        const MAX_SIZE_BYTES: u64 = 8;
+        let size_bytes = size.bytes();
+
         let start_address = address.bytes();
-        let end_address = address.bytes() + size.bytes(); // +7 to not miss any bytes (but potentially write too many (GenMC might not like that))
-        let rem = size.bytes() % 8;
+        let end_address = start_address + size_bytes;
+
+        let start_missing = MAX_SIZE_BYTES - (start_address % MAX_SIZE_BYTES);
+        let end_missing = end_address % MAX_SIZE_BYTES;
+
+        let start_address_aligned = start_address + start_missing;
+        let end_address_aligned = end_address - end_missing;
+        assert_eq!(0, start_address_aligned % MAX_SIZE_BYTES);
+        assert_eq!(0, end_address_aligned % MAX_SIZE_BYTES);
+
         info!(
-            "GenMC: splitting memory_load into 8 byte chunks in range: {start_address:#x} to {end_address:#x}, size: {}, rem bytes: {rem}",
-            size.bytes()
+            "GenMC: splitting memory_load into {MAX_SIZE_BYTES} byte chunks: {start_missing} + {} * {MAX_SIZE_BYTES} + {end_missing}",
+            (end_address_aligned - start_address_aligned) / MAX_SIZE_BYTES
         );
-        for chunk_address in (start_address..end_address).step_by(8) {
-            let chunk_addr = Size::from_bytes(chunk_address);
-            let chunk_size = Size::from_bytes(8);
-            info!("GenMC:   loading chunk @ {chunk_address:#x}");
-            let _read_value = self.atomic_load_impl(
-                machine,
-                chunk_addr,
-                chunk_size,
-                MemOrdering::NotAtomic,
-                GenmcScalar::UNINIT, // Don't use DUMMY here, since that might have it stored as the initial value
-            )?;
-        }
-        // TODO GENMC (HACK): just assume the rest are 1 byte accesses:
-        for offset in 0..rem {
-            let chunk_addr = Size::from_bytes(end_address - rem + offset);
-            let chunk_size = Size::from_bytes(1);
+
+        let start_chunks = (0..start_missing).map(|offset| (start_address + offset, 1));
+        let aligned_chunks = (start_address..end_address)
+            .step_by(MAX_SIZE_BYTES.try_into().unwrap())
+            .map(|address| (address, MAX_SIZE_BYTES));
+        let end_chunks = (0..end_missing).map(|offset| (end_address_aligned + offset, 1));
+
+        for (address, size) in start_chunks.chain(aligned_chunks).chain(end_chunks) {
+            let chunk_addr = Size::from_bytes(address);
+            let chunk_size = Size::from_bytes(size);
             let _read_value = self.atomic_load_impl(
                 machine,
                 chunk_addr,
@@ -513,7 +513,6 @@ impl GenmcCtx {
             );
             return interp_ok(());
         }
-        info!("GenMC: received memory_store (non-atomic): address: {address:?}, size: {size:?}");
         // GenMC doesn't like ZSTs, and they can't have any data races, so we skip them
         if size.bytes() == 0 {
             return interp_ok(());
@@ -531,38 +530,34 @@ impl GenmcCtx {
             )?;
             return interp_ok(());
         }
-        let alignment = address.bytes() % 8;
-        if alignment != 0 {
-            todo!(
-                "Memory accesses not aligned to at least 8 bytes not yet supported (addr: {address:?}, size: {size:?})"
-            );
-        }
+        // Handle possible misalignment: TODO GENMC: could always do largest power-of-two here
+        const MAX_SIZE_BYTES: u64 = 8;
+        let size_bytes = size.bytes();
+
         let start_address = address.bytes();
-        let end_address = address.bytes() + size.bytes();
-        let rem = size.bytes() % 8;
+        let end_address = start_address + size_bytes;
+        let start_missing = MAX_SIZE_BYTES - (start_address % MAX_SIZE_BYTES);
+        let end_missing = size_bytes % MAX_SIZE_BYTES;
+
+        let start_address_aligned = start_address + start_missing;
+        let end_address_aligned = end_address - end_missing;
+        assert_eq!(0, start_address_aligned % MAX_SIZE_BYTES);
+        assert_eq!(0, end_address_aligned % MAX_SIZE_BYTES);
+
         info!(
-            "GenMC: splitting memory_store into 8 byte chunks in range: {start_address:#x} to {end_address:#x}, size: {}, rem bytes: {rem}",
-            size.bytes()
+            "GenMC: splitting memory_load into {MAX_SIZE_BYTES} byte chunks: {start_missing} + {} * {MAX_SIZE_BYTES} + {end_missing}",
+            (end_address_aligned - start_address_aligned) / MAX_SIZE_BYTES
         );
-        // NOTE: This will skip up to 7 bytes at the end
-        for chunk_address in (start_address..end_address).step_by(8) {
-            let chunk_addr = Size::from_bytes(chunk_address);
-            let chunk_size = Size::from_bytes(8);
-            info!("GenMC:   writing chunk @ {chunk_address:#x}");
-            // TODO GENMC(mixed atomic-non-atomics): anything to do here?
-            let _is_co_max_write = self.atomic_store_impl(
-                machine,
-                chunk_addr,
-                chunk_size,
-                GenmcScalar::DUMMY,
-                GenmcScalar::UNINIT, // Don't use DUMMY here, since that might have it stored as the initial value
-                MemOrdering::NotAtomic,
-            )?;
-        }
-        // TODO GENMC (HACK): just assume the rest are 1 byte accesses:
-        for offset in 0..rem {
-            let chunk_addr = Size::from_bytes(end_address - rem + offset);
-            let chunk_size = Size::from_bytes(8);
+
+        let start_chunks = (0..start_missing).map(|offset| (start_address + offset, 1));
+        let aligned_chunks = (start_address..end_address)
+            .step_by(MAX_SIZE_BYTES.try_into().unwrap())
+            .map(|address| (address, MAX_SIZE_BYTES));
+        let end_chunks = (0..end_missing).map(|offset| (end_address_aligned + offset, 1));
+
+        for (address, size) in start_chunks.chain(aligned_chunks).chain(end_chunks) {
+            let chunk_addr = Size::from_bytes(address);
+            let chunk_size = Size::from_bytes(size);
             // TODO GENMC(mixed atomic-non-atomics): anything to do here?
             let _is_co_max_write = self.atomic_store_impl(
                 machine,
