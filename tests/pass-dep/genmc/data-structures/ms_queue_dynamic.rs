@@ -7,19 +7,14 @@
 #![allow(static_mut_refs)]
 #![allow(unused)]
 
+use std::alloc::{Layout, alloc, dealloc};
 use std::ffi::c_void;
 use std::sync::atomic::Ordering::*;
 use std::sync::atomic::{AtomicPtr, AtomicU64};
 
 use libc::{self, pthread_attr_t, pthread_t};
 
-const MAX_READERS: usize = 3;
-const MAX_WRITERS: usize = 3;
-const MAX_RDWR: usize = 3;
-
 const MAX_THREADS: usize = 32;
-
-const MAX_NODES: usize = 0xFF;
 
 const POISON_IDX: u64 = 0xAAAABBBBBBBBAAAA;
 
@@ -42,11 +37,11 @@ struct MyStack {
 
 impl Node {
     pub unsafe fn new_alloc() -> *mut Self {
-        Box::into_raw(Box::<Self>::new_uninit()) as *mut Self
+        alloc(Layout::new::<Self>()) as *mut Self
     }
 
     pub unsafe fn free(node: *mut Self) {
-        let _ = Box::from_raw(node);
+        dealloc(node as *mut u8, Layout::new::<Self>())
     }
 
     pub unsafe fn reclaim(_node: *mut Self) {
@@ -63,13 +58,11 @@ impl MyStack {
 
     pub unsafe fn init_queue(&mut self, _num_threads: usize) {
         /* initialize queue */
-
-        // TODO GENMC (HACK): Could this be made non-atomic?
         let mut dummy = Node::new_alloc();
-        (*dummy).next.store(std::ptr::null_mut(), Relaxed);
-        self.head.store(dummy, Relaxed);
-        self.tail.store(dummy, Relaxed);
-        // atomic_init(&s->top, 0);
+
+        (*dummy).next = AtomicPtr::new(std::ptr::null_mut());
+        self.head = AtomicPtr::new(dummy);
+        self.tail = AtomicPtr::new(dummy);
     }
 
     pub unsafe fn clear_queue(&mut self, _num_threads: usize) {
@@ -86,9 +79,7 @@ impl MyStack {
         let mut tail;
         let node = Node::new_alloc();
         (*node).value = value;
-        // TODO GENMC (HACK): cannot use an NA write here (no mixed access support yet)
-        // (*node).next = AtomicPtr::new(std::ptr::null_mut());
-        (*node).next.store(std::ptr::null_mut(), Relaxed);
+        (*node).next = AtomicPtr::new(std::ptr::null_mut());
 
         loop {
             tail = self.tail.load(Acquire);
@@ -116,7 +107,9 @@ impl MyStack {
         loop {
             let head = self.head.load(Acquire);
             let tail = self.tail.load(Acquire);
-            let next = (*head).next.load(Acquire);
+
+            let next_ref = &(*head).next;
+            let next = next_ref.load(Acquire);
             if self.head.load(Acquire) != head {
                 continue;
             }
@@ -162,10 +155,6 @@ extern "C" fn thread_r(value: *mut c_void) -> *mut c_void {
 extern "C" fn thread_rw(value: *mut c_void) -> *mut c_void {
     unsafe {
         let pid = *(value as *mut u64);
-        // TODO GENMC: how to print here?
-        // println!("PID: {pid}");
-        // eprintln!("PID: {pid}");
-        // libc::printf("%lu".as_ptr() as *const i8, pid);
 
         INPUT[pid as usize] = pid * 10;
         QUEUE.enqueue(INPUT[pid as usize]);
@@ -180,7 +169,7 @@ extern "C" fn thread_rw(value: *mut c_void) -> *mut c_void {
 fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
     let attr: *const pthread_attr_t = std::ptr::null();
 
-    // TODO GENMC: make different tests:
+    // TODO GENMC (TESTS): make different tests:
     let readers = 0;
     let writers = 0;
     let rdwr = 2;
@@ -193,43 +182,37 @@ fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
 
     let mut i = 0;
     unsafe {
-        // TODO GENMC (HACK): we need to access all globals here once, since we don't have back-dating of allocations yet
-        INPUT[0] = POISON_IDX;
-        OUTPUT[0] = None;
-
         MyStack::init_queue(&mut QUEUE, num_threads);
 
         for j in 0..num_threads {
             PARAMS[j] = j as u64;
         }
-        for _ in 0..readers {
+
+        /* Spawn threads */
+        for _ in 0..writers {
             let value: *mut c_void = (&raw mut PARAMS[i]) as *mut c_void;
-            let ret = libc::pthread_create(&raw mut THREADS[i], attr, thread_r, value);
-            if 0 != ret {
+            if 0 != libc::pthread_create(&raw mut THREADS[i], attr, thread_w, value) {
                 std::process::abort();
             }
             i += 1;
         }
-        for _ in 0..writers {
+        for _ in 0..readers {
             let value: *mut c_void = (&raw mut PARAMS[i]) as *mut c_void;
-            let ret = libc::pthread_create(&raw mut THREADS[i], attr, thread_w, value);
-            if 0 != ret {
+            if 0 != libc::pthread_create(&raw mut THREADS[i], attr, thread_r, value) {
                 std::process::abort();
             }
             i += 1;
         }
         for _ in 0..rdwr {
             let value: *mut c_void = (&raw mut PARAMS[i]) as *mut c_void;
-            let ret = libc::pthread_create(&raw mut THREADS[i], attr, thread_rw, value);
-            if 0 != ret {
+            if 0 != libc::pthread_create(&raw mut THREADS[i], attr, thread_rw, value) {
                 std::process::abort();
             }
             i += 1;
         }
 
         for i in 0..num_threads {
-            let ret = libc::pthread_join(THREADS[i], std::ptr::null_mut());
-            if 0 != ret {
+            if 0 != libc::pthread_join(THREADS[i], std::ptr::null_mut()) {
                 std::process::abort();
             }
         }
