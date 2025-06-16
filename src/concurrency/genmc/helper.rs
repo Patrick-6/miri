@@ -131,6 +131,7 @@ pub fn genmc_scalar_to_scalar<'tcx>(
     interp_ok(Scalar::Int(value_scalar_int))
 }
 
+#[derive(Debug)]
 pub enum NextInstrInfo {
     None, // TODO GENMC: reduce this to 1 bool
     Statement,
@@ -183,22 +184,35 @@ fn is_terminator_atomic<'tcx>(
             match ecx.instantiate_from_frame_and_normalize_erasing_regions(frame, func_ty) {
                 // match ecx.instantiate_from_current_frame_and_normalize_erasing_regions(func_ty) {
                 Err(err) => {
-                    info!("GenMC: error when checking terminator kind: {err:?}");
+                    info!("GenMC:   error when checking terminator kind: {err:?}");
                     // TODO GENMC: currently careful, but could return NonAtomic maybe?
                     true // possibly atomic?
                     // TODO GENMC: use ? here, make result interp_result
                 }
                 Ok(func_ty) => {
-                    info!("GenMC: terminator is a function with ty: {func_ty:?}");
+                    info!("GenMC:   terminator is a function with ty: {func_ty:?}");
                     match func_ty.kind() {
                         // Atomics are modeled as intrinsics and can only be called through a `FnDef` (not through `FnPtr`)
                         ty::FnDef(def_id, _args) => {
-                            info!("GenMC:   function DefId: {def_id:?}");
+                            let item_name = ecx.tcx.item_name(*def_id);
+                            info!(
+                                "GenMC:     function DefId: {def_id:?}, item name: {item_name:?}"
+                            );
+                            if item_name.as_str().contains("join") {
+                                // TODO GENMC: add thread creation
+                                return true; // TODO GENMC: improve this code
+                            }
                             let Some(intrinsic_def) = ecx.tcx.intrinsic(def_id) else {
                                 return false;
                             };
+                            // assert!(
+                            //     !item_name.as_str().contains("join"),
+                            //     "oh no: item name: {item_name:?}"
+                            // );
+                            info!("GenMC:     intrinsic name: \"{}\"", intrinsic_def.name.as_str());
                             // TODO GENMC: make this more precise (only loads)
                             intrinsic_def.name.as_str().starts_with("atomic_")
+                            // || intrinsic_def.name.as_str().contains("join")
                         }
                         _ => false,
                     }

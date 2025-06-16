@@ -10,12 +10,6 @@ impl GenmcScalar {
     pub const UNINIT: Self = Self { value: 0, extra: 0, is_init: false };
 }
 
-impl Default for ThreadStateInfo {
-    fn default() -> Self {
-        Self { state: ThreadState::Terminated, is_next_instr_load: true }
-    }
-}
-
 impl Default for GenmcParams {
     fn default() -> Self {
         Self {
@@ -40,6 +34,19 @@ mod ffi {
         pub quiet: bool, // TODO GENMC: maybe make log-level more fine grained
         pub log_level_trace: bool,
         pub do_symmetry_reduction: bool,
+    }
+
+    #[derive(Debug)]
+    enum ActionKind {
+        Load,
+        NonLoad,
+    }
+
+    #[derive(Debug)]
+    enum ThreadState {
+        Enabled,
+        Blocked,
+        Terminated,
     }
 
     #[derive(Debug)]
@@ -73,20 +80,6 @@ mod ffi {
         Normal,
         ReadModifyWrite,
         CompareExchange,
-    }
-
-    #[derive(Debug)]
-    enum ThreadState {
-        Enabled = 0,
-        Blocked = 1,
-        StackEmpty = 2,
-        Terminated = 3, // TODO GENMC: check if any other states/info is needed
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    struct ThreadStateInfo {
-        state: ThreadState,
-        is_next_instr_load: bool,
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -173,7 +166,7 @@ mod ffi {
         type StoreEventType;
 
         // Types for Scheduling queries:
-        type ThreadStateInfo;
+        type ActionKind;
         type ThreadState;
 
         // Result / Error types:
@@ -194,10 +187,7 @@ mod ffi {
         fn getGlobalAllocStaticMask() -> u64;
 
         fn handleExecutionStart(self: Pin<&mut MiriGenMCShim>);
-        fn handleExecutionEnd(
-            self: Pin<&mut MiriGenMCShim>,
-            thread_states: &[ThreadStateInfo],
-        ) -> UniquePtr<CxxString>;
+        fn handleExecutionEnd(self: Pin<&mut MiriGenMCShim>) -> UniquePtr<CxxString>;
 
         fn handleLoad(
             self: Pin<&mut MiriGenMCShim>,
@@ -258,11 +248,19 @@ mod ffi {
         /**** Blocking instructions ****/
         fn handleUserBlock(self: Pin<&mut MiriGenMCShim>, thread_id: i32);
 
-        fn scheduleNext(self: Pin<&mut MiriGenMCShim>, thread_states: &[ThreadStateInfo]) -> i64;
+        fn scheduleNext(
+            self: Pin<&mut MiriGenMCShim>,
+            curr_thread_id: i32,
+            curr_thread_next_instr_kind: ActionKind,
+            curr_thread_state: ThreadState,
+        ) -> i64;
 
+        fn getStuckExecutionCount(self: &MiriGenMCShim) -> u64;
         fn isHalting(self: &MiriGenMCShim) -> bool;
         fn isMoot(self: &MiriGenMCShim) -> bool;
         fn isExplorationDone(self: Pin<&mut MiriGenMCShim>) -> bool;
+
+        fn handle_thread_stack_empty(self: Pin<&mut MiriGenMCShim>, thread_id: i32);
 
         fn printGraph(self: Pin<&mut MiriGenMCShim>);
     }

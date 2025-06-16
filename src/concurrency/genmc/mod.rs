@@ -2,8 +2,8 @@ use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use genmc_sys::{
-    GENMC_GLOBAL_ADDRESSES_MASK, GenmcScalar, MemOrdering, MiriGenMCShim, RMWBinOp, StoreEventType,
-    ThreadState, ThreadStateInfo, createGenmcHandle,
+    ActionKind, GENMC_GLOBAL_ADDRESSES_MASK, GenmcScalar, MemOrdering, MiriGenMCShim, RMWBinOp,
+    StoreEventType, createGenmcHandle,
 };
 use rustc_abi::{Align, Size};
 use rustc_const_eval::interpret::{AllocId, InterpCx, InterpResult, interp_ok};
@@ -48,9 +48,6 @@ pub struct GenmcCtx {
     /// GenMC will not be informed about certain actions (e.g. non-atomic loads) when this flag is set.
     allow_data_races: Cell<bool>,
 
-    // TODO GENMC: remove this, use GenMC's counter instead (on `GenMCDriver::Result`)
-    stuck_execution_count: Cell<usize>,
-
     curr_thread_user_block: Cell<bool>,
 
     /// Keep track of global allocations, to ensure they keep the same address across different executions, even if the order of allocations changes.
@@ -87,15 +84,14 @@ impl GenmcCtx {
             handle: non_null_handle,
             thread_infos: Default::default(),
             allow_data_races: Cell::new(false),
-            stuck_execution_count: Cell::new(0),
             curr_thread_user_block: Cell::new(false),
             global_allocations: Default::default(),
         }
     }
 
-    pub fn get_stuck_execution_count(&self) -> usize {
-        // TODO GENMC: ask GenMC for this number
-        self.stuck_execution_count.get()
+    pub fn get_stuck_execution_count(&self) -> u64 {
+        let mc = self.handle.borrow();
+        mc.as_ref().getStuckExecutionCount()
     }
 
     pub fn print_genmc_graph(&self) {
@@ -151,16 +147,13 @@ impl GenmcCtx {
     /// This function must be called even when the execution got stuck (i.e., it returned a `InterpErrorKind::MachineStop` with error kind `TerminationInfo::GenmcStuckExecution`).
     pub(crate) fn handle_execution_end<'tcx>(
         &self,
-        ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
+        _ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
     ) -> Result<(), String> {
         info!("GenMC: inform GenMC that execution ended!");
-        let (thread_states, _enabled_count) = self.get_thread_states(ecx);
-        info!("Thread states after execution ends: {thread_states:?}");
-
         let mut mc = self.handle.borrow_mut();
 
         let pinned_mc = mc.as_mut();
-        let result = pinned_mc.handleExecutionEnd(&thread_states);
+        let result = pinned_mc.handleExecutionEnd();
         if let Some(msg) = result.as_ref() {
             let msg = msg.to_string_lossy().to_string();
             info!("GenMC: execution ended with error \"{msg}\"");
@@ -719,6 +712,7 @@ impl GenmcCtx {
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut();
+
         // TODO GENMC: error handling:
         pinned_mc.handleThreadJoin(genmc_curr_tid.0, genmc_child_tid.0);
 
@@ -726,9 +720,14 @@ impl GenmcCtx {
     }
 
     pub(crate) fn handle_thread_stack_empty(&self, thread_id: ThreadId) {
-        info!("GenMC: thread {thread_id:?} finished");
+        info!("GenMC: thread stack empty: {thread_id:?}");
         let mut thread_infos = self.thread_infos.borrow_mut();
-        thread_infos.get_info_mut(thread_id).user_code_finished = true;
+        let info = thread_infos.get_info_mut(thread_id);
+        info.user_code_finished = true;
+
+        let mut mc = self.handle.borrow_mut();
+        let pinned_mc = mc.as_mut();
+        pinned_mc.handle_thread_stack_empty(info.genmc_tid.0);
     }
 
     pub(crate) fn handle_thread_finish<'tcx>(
@@ -774,54 +773,60 @@ impl GenmcCtx {
         let thread_manager = &ecx.machine.threads;
         let active_thread_id = thread_manager.active_thread();
 
-        // We need to ask GenMC for a scheduling decision if:
-        // - We are about to execute a MIR Terminator
-        // - The current thread has no more user code to execute (the main thread yields a few times in that case)
-        // - The current thread is blocked
-        // - We just executed a GenMC `UserBlock` (this is not covered by the previous case, since Miri doesn't see `UserBlock`s)
-        let curr_thread_user_block = self.curr_thread_user_block.replace(false);
-        let thread_user_code_finished = {
-            let thread_infos = self.thread_infos.borrow();
-            thread_infos.get_info(active_thread_id).user_code_finished
-        };
+        // let curr_thread_user_block = self.curr_thread_user_block.replace(false);
+        let thread_infos = self.thread_infos.borrow();
+        let curr_thread_info = thread_infos.get_info(active_thread_id);
+
         let next_instr_info = get_next_instr_info(ecx, thread_manager, active_thread_id);
         let is_next_instr_atomic_load =
             matches!(next_instr_info, NextInstrInfo::Terminator { is_atomic: true });
-        if !curr_thread_user_block
-            && !thread_user_code_finished
-            && thread_manager.threads_ref()[active_thread_id].get_state().is_enabled()
-            && !is_next_instr_atomic_load
-        {
-            info!("GenMC: schedule_thread called, but no scheduling decision required...");
-            // TODO GENMC: skip the checks in the calling function in this case:
-            return interp_ok(active_thread_id);
-        }
-        info!("GenMC: schedule_thread called on terminator");
 
-        let (thread_states, enabled_count) = self.get_thread_states(ecx);
-        assert_ne!(0, enabled_count);
+        let curr_thread_next_instr_kind =
+            if is_next_instr_atomic_load { ActionKind::Load } else { ActionKind::NonLoad };
+
+        let state = thread_manager.threads_ref()[active_thread_id].get_state();
+        info!(
+            "GenMC: schedule_thread, active thread: {active_thread_id:?}, state: {state:?}, state.is_enabled(): {}, state.is_terminated(): {}",
+            state.is_enabled(),
+            state.is_terminated()
+        );
+        let curr_thread_state = match state {
+            crate::concurrency::thread::ThreadState::Enabled => genmc_sys::ThreadState::Enabled,
+            crate::concurrency::thread::ThreadState::Blocked { .. } =>
+                genmc_sys::ThreadState::Blocked,
+            crate::concurrency::thread::ThreadState::Terminated =>
+                genmc_sys::ThreadState::Terminated,
+        };
+
+        info!(
+            "GenMC: schedule_thread, active thread: {active_thread_id:?}, next instruction is a '{next_instr_info:?}', curr_thread_state: {curr_thread_state:?}"
+        );
 
         let mut mc = self.handle.borrow_mut();
         let pinned_mc = mc.as_mut();
-        let result = pinned_mc.scheduleNext(&thread_states);
-        info!("GenMC: schedule_thread: states: {thread_states:?}, scheduling result: {result}");
+        let result = pinned_mc.scheduleNext(
+            curr_thread_info.genmc_tid.0,
+            curr_thread_next_instr_kind,
+            curr_thread_state,
+        );
 
         if result >= 0 {
             let genmc_next_thread_id = GenmcThreadIdInner::try_from(result).unwrap();
-            assert_eq!(
-                thread_states.get(usize::try_from(genmc_next_thread_id).unwrap()).unwrap().state,
-                ThreadState::Enabled
-            );
+
             // TODO GENMC: can we ensure this thread_id is valid?
             let genmc_next_thread_id = GenmcThreadId(genmc_next_thread_id);
             let thread_infos = self.thread_infos.borrow();
             let next_thread_id = thread_infos.get_info_genmc(genmc_next_thread_id).miri_tid;
+
+            let next_thread_state = thread_manager.threads_ref()[next_thread_id].get_state();
+            assert!(
+                next_thread_state.is_enabled(),
+                "cannot schedule requested thread '{next_thread_id:?}' (GenMC TID: {genmc_next_thread_id:?}), it is blocked, state: {next_thread_state:?}."
+            );
             interp_ok(next_thread_id)
         } else {
             // Negative result means there is no next thread to schedule
             info!("GenMC: scheduleNext returned no thread to schedule");
-            // TODO GENMC: don't keep track of this, ask GenMC for the count instead:
-            self.stuck_execution_count.update(|count| count + 1);
             throw_machine_stop!(TerminationInfo::GenmcStuckExecution);
         }
     }
@@ -866,7 +871,7 @@ impl GenmcCtx {
         let genmc_tid = thread_infos.get_info(curr_thread_id).genmc_tid;
 
         info!(
-            "GenMC: load, thread: {curr_thread_id:?} ({genmc_tid:?}), address: {addr} == {addr:#x}, size: {size:?}, ordering: {memory_ordering:?}, old_value: {genmc_old_value:#x?}",
+            "GenMC: load, thread: {curr_thread_id:?} ({genmc_tid:?}), address: {addr} == {addr:#x}, size: {size:?}, ordering: {memory_ordering:?}, old_value: {genmc_old_value:x?}",
             addr = address.bytes()
         );
         let genmc_address = size_to_genmc(address);
@@ -994,64 +999,6 @@ impl GenmcCtx {
 
         let new_value_scalar = genmc_scalar_to_scalar(ecx, rmw_result.new_value, size)?;
         interp_ok((old_value_scalar, new_value_scalar))
-    }
-
-    // TODO GENMC: optimize this:
-    fn get_thread_states<'tcx>(
-        &self,
-        ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
-    ) -> (Vec<ThreadStateInfo>, usize) {
-        let thread_manager = &ecx.machine.threads;
-        let thread_infos = self.thread_infos.borrow();
-        let thread_count = thread_infos.thread_count();
-
-        // TODO GENMC: improve performance, e.g., with SmallVec
-        let mut thread_states: Vec<ThreadStateInfo> =
-            vec![ThreadStateInfo::default(); thread_count];
-
-        let mut enabled_count = 0;
-        for (thread_id, thread) in thread_manager.threads_ref().iter_enumerated() {
-            // If a thread is finished, there might still be something to do (see `src/concurrency/thread.rs`: `run_on_stack_empty`)
-            // In that case, the thread is still enabled, but has an empty stack
-            // We don't want to run this thread in GenMC mode (especially not the main thread, which terminates the program once it's done)
-            // We tell GenMC that this thread is disabled
-            let is_enabled = thread.get_state().is_enabled();
-            // TODO GENMC:
-            // let is_finished = thread.top_user_relevant_frame().is_none();
-            // let user_code_finished = thread_infos.get_info(thread_id).user_code_finished;
-            let thread_info = thread_infos.get_info(thread_id);
-            let user_code_finished = thread_info.user_code_finished;
-            let index = usize::try_from(thread_info.genmc_tid.0).unwrap();
-
-            let state = match (is_enabled, user_code_finished) {
-                (true, false) => {
-                    enabled_count += 1;
-                    ThreadState::Enabled
-                }
-                (true, true) => ThreadState::StackEmpty,
-                (false, true) => ThreadState::Terminated,
-                (false, false) => ThreadState::Blocked,
-            };
-            // TODO GENMC (PERFORMANCE): cache this, only update for current thread (other's don't make progress)
-            let is_next_instr_load = matches!(
-                get_next_instr_info(ecx, thread_manager, thread_id),
-                NextInstrInfo::Terminator { is_atomic: true }
-            );
-            thread_states[index] = ThreadStateInfo { state, is_next_instr_load };
-        }
-        // Once there are no threads with non-empty stacks anymore, we allow scheduling threads with empty stacks:
-        // TODO GENMC (QUESTION): decide if this can only happen for the main thread:
-        if enabled_count == 0 {
-            for thread_state in thread_states.iter_mut().rev() {
-                if ThreadState::StackEmpty == thread_state.state {
-                    thread_state.state = ThreadState::Enabled;
-                    enabled_count += 1;
-                    break;
-                }
-            }
-        }
-        // TODO GENMC (PERFORMANCE): could possibly skip scheduling call to GenMC if we only have 1 enabled thread (WARNING: may not be correct with GenMC BlockLabels)
-        (thread_states, enabled_count)
     }
 
     fn handle_user_block<'tcx>(&self, machine: &MiriMachine<'tcx>) -> InterpResult<'tcx, ()> {

@@ -2,16 +2,16 @@ use std::path::PathBuf;
 
 fn main() {
     /*
-        Future TODOs:
-        - Add automatic git checkout with specific commit
-          - Add way to override this locally for development (e.g., if ./genmc exists, use that, otherwise, download specific commit from Github)
-        - Get rid of LLVM dependency
-        - Pass debug / release mode config to cmake
-          - Decide if GENMC_DEBUG should stay enabled (or some subset of it?)
+       Future TODOs:
+       - Add automatic git checkout with specific commit
+         - Add way to override this locally for development (e.g., if ./genmc exists, use that, otherwise, download specific commit from Github)
+       - Get rid of LLVM dependency
+       - Pass debug / release mode config to cmake
+         - Decide if GENMC_DEBUG should stay enabled (or some subset of it?)
 
-        Far Future TODOs:
-        - Add cross language LTO
-     */
+       Far Future TODOs:
+       - Add cross language LTO
+    */
 
     const GENMC_MIRI_LIB: &str = "genmc_miri";
     const RUST_CXX_BRIDGE_FILE_PATH: &str = "src/lib.rs";
@@ -32,7 +32,7 @@ fn main() {
     config.define("MIRI", "ON"); // FIXME(genmc,cmake): is this the proper way to do Miri-specific settings?
     let dst = config.build();
     println!("cargo::warning=config.build() returned value: '{dst:?}'");
-// target/debug/build/genmc-sys-29018f8e78734f22/out/build/src/MiriInterop/libgenmc_miri.a
+    // target/debug/build/genmc-sys-29018f8e78734f22/out/build/src/MiriInterop/libgenmc_miri.a
     // println!("cargo:rustc-link-search=native={}", dst.display());
     println!("cargo:rustc-link-search=native={}/build/src/MiriInterop/", dst.display());
     println!("cargo:rustc-link-lib=static={GENMC_MIRI_LIB}");
@@ -47,8 +47,12 @@ fn main() {
     let extensions = ["cpp", "cc", "hpp", "h", "c"].map(std::ffi::os_str::OsStr::new);
     for entry in walkdir::WalkDir::new(genmc_src_path).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
-        if path.is_file() && path.extension().is_some_and(|ext| extensions.contains(&ext)) {
-            println!("cargo::rerun-if-changed={}", path.display());
+        if path.is_file() {
+            if path.extension().is_some_and(|ext| extensions.contains(&ext))
+                || entry.file_name().to_string_lossy().contains("CMakeLists.txt")
+            {
+                println!("cargo::rerun-if-changed={}", path.display());
+            }
         }
     }
 }

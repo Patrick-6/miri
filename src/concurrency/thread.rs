@@ -1026,12 +1026,10 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         let thread = this.active_thread_mut();
         assert!(thread.stack.is_empty(), "only threads with an empty stack can be terminated");
         thread.state = ThreadState::Terminated;
-        match &mut this.machine.data_race {
-            GlobalDataRaceHandler::None => {}
-            GlobalDataRaceHandler::Vclocks(data_race) =>
-                data_race.thread_terminated(&this.machine.threads),
-            GlobalDataRaceHandler::Genmc(genmc_ctx) =>
-                genmc_ctx.handle_thread_finish(&this.machine.threads)?,
+
+        // TODO GENMC (QUESTION): Can we move this down to where the GenmcCtx is?
+        if let Some(data_race) = this.machine.data_race.as_vclocks_mut() {
+            data_race.thread_terminated(&this.machine.threads);
         }
         // Deallocate TLS.
         let gone_thread = this.active_thread();
@@ -1063,6 +1061,13 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 }
             }
         }
+
+        // Inform GenMC that the thread finished.
+        // This needs to happen once all accesses to the thread are done, including freeing any TLS statics.
+        if let Some(genmc_ctx) = this.machine.data_race.as_genmc_ref() {
+            genmc_ctx.handle_thread_finish(&this.machine.threads)?;
+        }
+
         // Unblock joining threads.
         let unblock_reason = BlockReason::Join(gone_thread);
         let threads = &this.machine.threads.threads;

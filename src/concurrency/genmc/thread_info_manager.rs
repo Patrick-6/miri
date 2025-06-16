@@ -58,6 +58,7 @@ impl ThreadInfoManager {
     }
 
     #[must_use]
+    #[allow(unused)]
     pub fn thread_count(&self) -> usize {
         self.thread_infos.len()
     }
