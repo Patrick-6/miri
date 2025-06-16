@@ -945,9 +945,15 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 this.write_null(dest)?;
             }
             "pthread_join" => {
+                // TODO GENMC (HACK): since pthread_join might block the thread, we can't have a write afterwards. On success this will always write 0, otherwise it doesn't matter.
                 let [thread, retval] = this.check_shim(abi, CanonAbi::C, link_name, args)?;
-                let res = this.pthread_join(thread, retval)?;
-                this.write_scalar(res, dest)?;
+                if this.machine.data_race.as_genmc_ref().is_some() {
+                    this.write_scalar(Scalar::from_u32(0), dest)?;
+                    let _res = this.pthread_join(thread, retval)?;
+                } else {
+                    let res = this.pthread_join(thread, retval)?;
+                    this.write_scalar(res, dest)?;
+                }
             }
             "pthread_detach" => {
                 let [thread] = this.check_shim(abi, CanonAbi::C, link_name, args)?;
