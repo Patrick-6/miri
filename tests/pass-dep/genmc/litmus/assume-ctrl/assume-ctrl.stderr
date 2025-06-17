@@ -1,1 +1,4 @@
-(GenMC Mode) Finished after 5 iterations, with 1 execution getting stuck.
+
+(GenMC) Verification complete. No errors were detected.
+Number of complete executions explored: 5
+Number of blocked executions seen: 1

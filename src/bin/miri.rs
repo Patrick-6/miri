@@ -190,7 +190,7 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
             let genmc_ctx = Rc::new(GenmcCtx::new(&config, genmc_config));
 
             // TODO GENMC: remove this (it's here to prevent infinite loops during development):
-            let max_reps = 1024;
+            let max_reps = 16 * 1024;
 
             for rep in 0..max_reps {
                 tracing::info!("MIRI: running GenMC loop {}/{max_reps}", rep + 1);
@@ -221,17 +221,13 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
                 );
 
                 if is_exploration_done {
+                    eprintln!();
+                    eprintln!("(GenMC) Verification complete. No errors were detected.");
                     // TODO GENMC: proper message here, which info should be printed?
                     let stuck_execution_count = genmc_ctx.get_stuck_execution_count();
-                    if stuck_execution_count == 0 {
-                        eprintln!("(GenMC Mode) Finished after {} iterations.", rep + 1);
-                    } else {
-                        // TODO GENMC: how should this be reported to the user?
-                        eprintln!(
-                            "(GenMC Mode) Finished after {} iterations, with {stuck_execution_count} {} getting stuck.",
-                            rep + 1,
-                            if stuck_execution_count == 1 { "execution" } else { "executions" }
-                        );
+                    eprintln!("Number of complete executions explored: {}", rep + 1);
+                    if stuck_execution_count > 0 {
+                        eprintln!("Number of blocked executions seen: {stuck_execution_count}");
                     }
 
                     // TODO GENMC: what is an appropriate return code? (since there are possibly many)
