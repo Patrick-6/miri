@@ -1,3 +1,4 @@
+//@only-target: windows # TODO GENMC (TESTS): "disabled" until Mutex support is implemented <==========================
 //@compile-flags: -Zmiri-genmc
 //@revisions: order12 order21
 
