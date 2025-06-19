@@ -30,6 +30,13 @@ fn main() {
     config.define("GENMC_DEBUG", "ON");
     config.define("BUILD_DOC", "OFF"); // We don't need to build GenMC documentation here
     config.define("MIRI", "ON"); // FIXME(genmc,cmake): is this the proper way to do Miri-specific settings?
+    config.define("LLI", "OFF");
+
+    // // TODO GENMC(BUILD): attempt at running LTO:
+    // // -DCMAKE_CXX_COMPILER=clang++
+    // config.define("CMAKE_CXX_COMPILER", "clang++");
+    // config.define("CMAKE_CXX_FLAGS", "-flto=thin");
+
     let dst = config.build();
     println!("cargo::warning=config.build() returned value: '{dst:?}'");
     // target/debug/build/genmc-sys-29018f8e78734f22/out/build/src/MiriInterop/libgenmc_miri.a
