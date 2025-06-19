@@ -255,6 +255,7 @@ mod ffi {
             curr_thread_state: ThreadState,
         ) -> i64;
 
+        // TODO GENMC: Replace once VerificationResult is accessible (or at least rename the function).
         fn getStuckExecutionCount(self: &MiriGenMCShim) -> u64;
         fn isHalting(self: &MiriGenMCShim) -> bool;
         fn isMoot(self: &MiriGenMCShim) -> bool;

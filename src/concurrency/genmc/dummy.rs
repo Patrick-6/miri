@@ -20,7 +20,7 @@ impl GenmcCtx {
         unreachable!()
     }
 
-    pub fn get_stuck_execution_count(&self) -> usize {
+    pub fn get_blocked_execution_count(&self) -> usize {
         unreachable!()
     }
 

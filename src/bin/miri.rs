@@ -224,10 +224,10 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
                     eprintln!();
                     eprintln!("(GenMC) Verification complete. No errors were detected.");
                     // TODO GENMC: proper message here, which info should be printed?
-                    let stuck_execution_count = genmc_ctx.get_stuck_execution_count();
+                    let blocked_execution_count = genmc_ctx.get_blocked_execution_count();
                     eprintln!("Number of complete executions explored: {}", rep + 1);
-                    if stuck_execution_count > 0 {
-                        eprintln!("Number of blocked executions seen: {stuck_execution_count}");
+                    if blocked_execution_count > 0 {
+                        eprintln!("Number of blocked executions seen: {blocked_execution_count}");
                     }
 
                     // TODO GENMC: what is an appropriate return code? (since there are possibly many)

@@ -89,7 +89,7 @@ impl GenmcCtx {
         }
     }
 
-    pub fn get_stuck_execution_count(&self) -> u64 {
+    pub fn get_blocked_execution_count(&self) -> u64 {
         let mc = self.handle.borrow();
         mc.as_ref().getStuckExecutionCount()
     }
@@ -144,7 +144,8 @@ impl GenmcCtx {
 
     /// Inform GenMC that the program's execution has ended.
     ///
-    /// This function must be called even when the execution got stuck (i.e., it returned a `InterpErrorKind::MachineStop` with error kind `TerminationInfo::GenmcStuckExecution`).
+    /// This function must be called even when the execution is blocked
+    /// (i.e., it returned a `InterpErrorKind::MachineStop` with error kind `TerminationInfo::GenmcBlockedExecution`).
     pub(crate) fn handle_execution_end<'tcx>(
         &self,
         _ecx: &InterpCx<'tcx, MiriMachine<'tcx>>,
@@ -762,7 +763,7 @@ impl GenmcCtx {
 
     /// Ask for a scheduling decision. This should be called before every MIR instruction.
     ///
-    /// GenMC may realize that the execution got stuck, then this function will return a `InterpErrorKind::MachineStop` with error kind `TerminationInfo::GenmcStuckExecution`).
+    /// GenMC may realize that the execution is blocked, then this function will return a `InterpErrorKind::MachineStop` with error kind `TerminationInfo::GenmcBlockedExecution`).
     ///
     /// This is **not** an error by iself! Treat this as if the program ended normally: `handle_execution_end` should be called next, which will determine if were are any actual errors.
     pub(crate) fn schedule_thread<'tcx>(
@@ -827,7 +828,7 @@ impl GenmcCtx {
         } else {
             // Negative result means there is no next thread to schedule
             info!("GenMC: scheduleNext returned no thread to schedule");
-            throw_machine_stop!(TerminationInfo::GenmcStuckExecution);
+            throw_machine_stop!(TerminationInfo::GenmcBlockedExecution);
         }
     }
 
