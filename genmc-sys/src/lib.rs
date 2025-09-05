@@ -66,7 +66,7 @@ impl Default for GenmcParams {
             do_symmetry_reduction: false, // TODO GENMC (PERFORMANCE): maybe make this default `true`
             estimation_max: 1000,
             // GenMC graphs can be quite large since Miri produces a lot of (non-atomic) events.
-            print_execution_graphs: Default::None,
+            print_execution_graphs: ExecutiongraphPrinting::None,
             disable_weak_memory_emulation: false,
         }
     }
