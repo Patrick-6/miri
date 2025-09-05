@@ -72,7 +72,7 @@ impl Default for GenmcParams {
 impl Default for LogLevel {
     fn default() -> Self {
         // FIXME(genmc): set `Tip` by default once the GenMC tips are relevant to Miri.
-        Self::Warning
+        Self::Error
     }
 }
 
