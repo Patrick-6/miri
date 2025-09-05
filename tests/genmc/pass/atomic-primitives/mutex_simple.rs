@@ -41,7 +41,7 @@ fn main_() {
         assert!(LOCK.try_lock().is_ok()); // Trying to lock now should *not* fail since the lock is not held.
     }
 
-    let ids = unsafe { create_pthreads_no_params([thread_1, thread_2]) };
+    let ids = unsafe { spawn_pthreads_no_params([thread_1, thread_2]) };
     unsafe { join_pthreads(ids) };
 
     let guard = LOCK.lock().unwrap();

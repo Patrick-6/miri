@@ -19,7 +19,7 @@ use crate::utils::miri_genmc_verifier_assume;
 
 #[unsafe(no_mangle)]
 fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
-    let _ids = unsafe { create_pthreads_no_params([thread_1, thread_2]) };
+    let _ids = unsafe { spawn_pthreads_no_params([thread_1, thread_2]) };
 
     0
 }
