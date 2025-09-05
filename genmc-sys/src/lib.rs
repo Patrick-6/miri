@@ -76,7 +76,7 @@ impl Default for LogLevel {
     fn default() -> Self {
         // FIXME(genmc): set `Warning` by default once changes to GenMC are upstreamed.
         // FIXME(genmc): set `Tip` by default once the GenMC tips are relevant to Miri.
-        Self::Warning
+        Self::Error
     }
 }
 
