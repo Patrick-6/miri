@@ -58,9 +58,13 @@ fn has_function_atomic_load_semantics<'tcx>(
         return interp_ok(matches!(item_name.as_str(), "pthread_join" | "WaitForSingleObject"));
     };
     let intrinsice_name = intrinsic_def.name.as_str();
-    info!("GenMC:   intrinsic name: '{intrinsice_name}'");
-    // FIXME(genmc): make this more precise (only loads). How can we make this maintainable?
-    interp_ok(intrinsice_name.starts_with("atomic_"))
+    let Some(suffix) = intrinsice_name.strip_prefix("atomic_") else {
+        return interp_ok(false); // Non-atomic, so guaranteed not an atomic load
+    };
+    // `atomic_store` is guaranteed not a load.
+    // Any future `atomic_*` intrinsics may have load semantics, so we err on the side of caution and classify them as "maybe loads".
+    // FIXME(genmc): make this more precise. (`atomic_fence`? `atomic_singlethreadfence`?)
+    interp_ok(suffix != "store")
 }
 
 impl GenmcCtx {
