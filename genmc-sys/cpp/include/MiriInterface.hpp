@@ -36,9 +36,14 @@ struct LoadResult;
 struct StoreResult;
 struct ReadModifyWriteResult;
 struct CompareExchangeResult;
+struct MutexLockResult;
 
 // GenMC uses `int` for its thread IDs.
 using ThreadId = int;
+
+// Types used for GenMC annotations, e.g., in `handle_mutex_unlock`.
+using AnnotID = ModuleID::ID;
+using AnnotT = SExpr<AnnotID>;
 
 /// Set the log level for GenMC.
 ///
@@ -140,6 +145,12 @@ struct MiriGenmcShim : private GenMCDriver {
     /// supplied assume statements. This can become a parameter once more types of assumes are
     /// added.
     void handle_assume_block(ThreadId thread_id);
+
+    /**** Mutex handling ****/
+    auto handle_mutex_lock(ThreadId thread_id, uint64_t address, uint64_t size) -> MutexLockResult;
+    auto handle_mutex_try_lock(ThreadId thread_id, uint64_t address, uint64_t size)
+        -> MutexLockResult;
+    auto handle_mutex_unlock(ThreadId thread_id, uint64_t address, uint64_t size) -> StoreResult;
 
     /***** Exploration related functionality *****/
 
@@ -245,6 +256,14 @@ struct MiriGenmcShim : private GenMCDriver {
      * indices, since GenMC expects us to do that.
      */
     std::vector<Action> threads_action_;
+
+    /**
+     * Map of already used annotation ids (e.g., for mutexes).
+     * FIXME(GenMC): For multithreading support, this map and the counter below need to be
+     * synchronized across threads.
+     */
+    std::unordered_map<uint64_t, ModuleID::ID> annotation_id {};
+    ModuleID::ID annotation_id_counter = 0;
 };
 
 /// Get the bit mask that GenMC expects for global memory allocations.
@@ -362,5 +381,16 @@ inline CompareExchangeResult from_error(std::unique_ptr<std::string> error) {
                                    .is_coherence_order_maximal_write = false };
 }
 } // namespace CompareExchangeResultExt
+
+namespace MutexLockResultExt {
+inline MutexLockResult ok(bool is_lock_acquired) {
+    return MutexLockResult { /* error: */ nullptr, is_lock_acquired };
+}
+
+inline MutexLockResult from_error(std::unique_ptr<std::string> error) {
+    return MutexLockResult { /* error: */ std::move(error),
+                             /* is_lock_acquired: */ false };
+}
+} // namespace MutexLockResultExt
 
 #endif /* GENMC_MIRI_INTERFACE_HPP */
