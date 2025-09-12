@@ -72,6 +72,9 @@ impl GenmcConfig {
                     "'-Zmiri-genmc-estimation-max=...' expects a positive integer argument, but got '{estimation_max_str}'"
                 )
             })?;
+        } else if trimmed_arg == "symmetry-reduction" {
+            // TODO GENMC (PERFORMANCE): maybe make this the default, have an option to turn it off instead
+            genmc_config.params.do_symmetry_reduction = true;
         } else if trimmed_arg == "print-genmc-output" {
             genmc_config.print_genmc_output = true;
         } else if trimmed_arg == "verbose" {
