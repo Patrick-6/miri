@@ -1,3 +1,4 @@
+use rustc_middle::throw_unsup_format;
 use tracing::debug;
 
 use crate::concurrency::thread::EvalContextExt as _;
@@ -78,8 +79,11 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                             if let Some(error) = result.error.as_ref() {
                                 throw_ub_format!("{}", error.to_string_lossy());
                             }
-                            // FIXME(genmc): How to handle this case? It should be a bug(?). Could a deadlock cause this?
-                            assert!(result.is_lock_acquired);
+                            // FIXME(genmc): How to handle this case? Deadlocks can cause this, but it may be a bug(?)
+                            // (Miri-GenMC doesn't yet have deadlock detection enabled in GenMC)
+                            if !result.is_lock_acquired {
+                                throw_unsup_format!("Could not lock Mutex, which may indicate a deadlock. (GenMC mode does not support deadlock detection yet).")
+                            }
                             interp_ok(())
                         }
                     ),
